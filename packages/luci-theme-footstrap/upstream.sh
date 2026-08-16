@@ -12,11 +12,11 @@ KIND="apk"
 # 25.12 installs the .apk, 24.10 the .ipk. They are the same build.
 
 REPO="VizzleTF/luci-theme-footstrap"
-VERSION="0.12.7-r1"
-ARTIFACT="luci-theme-footstrap-0.12.7-r1.apk"
-SHA256="3f7c4540d27573efaff390bd8375ecf0c426ec1999c1d4d1d6f211d8b71c889c"
-ARTIFACT_IPK="luci-theme-footstrap_0.12.7-r1_all.ipk"
-SHA256_IPK="386e729e7a15fdfe9db8522d64ef7f0af99553e6fd0bdfc048338cc1dea3a6d0"
+VERSION="0.12.8-r1"
+ARTIFACT="luci-theme-footstrap-0.12.8-r1.apk"
+SHA256="9b8ce97ea5ede4636ed3ead3528bbcc5e9ea89fe2734be9590f181073acd3a77"
+ARTIFACT_IPK="luci-theme-footstrap_0.12.8-r1_all.ipk"
+SHA256_IPK="fad0d80ecd3e37ca31b54d5e47fe233b725ae1f61a5dcf74471b1f94c4391a1a"
 
 # The release is verified against this key before it is ingested, so the feed's
 # signature means the author signed it. The key id is pinned as well: the id inside
