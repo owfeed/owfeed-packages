@@ -1,22 +1,25 @@
-# luci-theme-footstrap — a LuCI theme.
+# luci-theme-footstrap — a LuCI theme, and the translation catalogues that go with it.
 #
 # Data only. tools/fetch.sh does the work; tools/check-updates.sh rewrites the
-# version and the checksum here and touches nothing else.
+# version here and touches nothing else.
 
-# Upstream's CI builds a finished .apk through the OpenWrt SDK, which compiles its
-# CSS and its translation catalogues. Rebuilding it here would ship something the
-# maintainer never tested.
-KIND="apk"
+# Upstream's CI builds finished packages and signs an inventory of them, so this
+# pins a version and a key and no checksum table: every file's size and sha256 come
+# out of manifest.txt, under the author's signature, verified before it is read.
+#
+# One entry, three packages. Since 0.14.4 upstream splits its catalogues out of the
+# theme the way luci.mk does — `luci-i18n-footstrap-ru` and `luci-i18n-footstrap-es`,
+# each DEPENDS on the theme — and every release names all three in the manifest, in
+# both containers. KIND="apk" could only pin one artifact per format, which is why a
+# Russian router could install the theme from this feed and not its own language.
+KIND="manifest"
 
 # Upstream publishes both containers, so this package serves both release lines:
 # 25.12 installs the .apk, 24.10 the .ipk. They are the same build.
 
 REPO="VizzleTF/luci-theme-footstrap"
 VERSION="0.14.4-r1"
-ARTIFACT="luci-theme-footstrap-0.14.4-r1.apk"
-SHA256="c43ef50e5d197bef4925b9b4e8dd089fb71785264f0445ff055d897aa2d14b15"
-ARTIFACT_IPK="luci-theme-footstrap_0.14.4-r1_all.ipk"
-SHA256_IPK="ebb11f923d4865f8a19d98ecd7e75ad3933b00eaf9c30d4f6cedb19dbc614e06"
+TAG="v0.14.4"
 
 # The release is verified against this key before it is ingested, so the feed's
 # signature means the author signed it. The key id is pinned as well: the id inside
