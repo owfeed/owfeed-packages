@@ -25,7 +25,7 @@ that is not the release you are about to trust it for.
 
 | key | id | covers |
 |---|---|---|
-| `vizzletf-release.pub` | `18c63865e2bcf8d6` | `luci-theme-footstrap`, `luci-app-footstrap-updater` |
+| `vizzletf-release.pub` | `18c63865e2bcf8d6` | `luci-theme-footstrap`, `luci-app-footstrap-updater`, `luci-app-footstrap-cmd` |
 | `podkop-updater.pub` | `37ddece4c0eef357` | `podkop-updater` |
 
 ### EC — package signatures, checked on the router by anyone who wants to
@@ -36,6 +36,7 @@ One per repository, which is what the note below asks for and what these meet.
 |---|---|---|
 | `luci-theme-footstrap.pub.pem` | `9bdfe74fb2b896642afbdebd9a4d653c` | `luci-theme-footstrap` |
 | `luci-app-footstrap-updater.pub.pem` | `19e4d189964d99db0a3b6ba04edb4552` | `luci-app-footstrap-updater` |
+| `luci-app-footstrap-cmd.pub.pem` | `89d0f51c214fb6d9aeb71558ec3dddf4` | `luci-app-footstrap-cmd` |
 | `podkop-updater.pub.pem` | `2e6784ccfa5af1f908b5904d26067249` | `podkop-updater` |
 
 `signing.author-keys` in `owfeed.yml` points at this directory, and `owfeed doctor` fails any
@@ -43,8 +44,8 @@ package that carries no signature by one of these. Only files ending in `.pem` a
 keys sit alongside and are used by `tools/fetch.sh`.
 
 A key per upstream repository rather than one per person is what this feed wants, and the table
-above does not yet meet it: `vizzletf-release.pub` covers two repositories, because one release
-pipeline signs both.
+above does not yet meet it: `vizzletf-release.pub` covers three repositories, because one release
+pipeline signs them all.
 
 The reason to want it: a signature says who wrote something and never what it is about, so one key
 across several repositories is how a manifest lifted from one of them verifies perfectly as
