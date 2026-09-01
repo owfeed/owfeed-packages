@@ -18,8 +18,8 @@ KIND="manifest"
 # 25.12 installs the .apk, 24.10 the .ipk. They are the same build.
 
 REPO="VizzleTF/luci-theme-footstrap"
-VERSION="0.14.6-r1"
-TAG="v0.14.6"
+VERSION="0.14.7-r1"
+TAG="v0.14.7"
 
 # The release is verified against this key before it is ingested, so the feed's
 # signature means the author signed it. The key id is pinned as well: the id inside
