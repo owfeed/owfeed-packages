@@ -17,8 +17,8 @@ KIND="manifest"
 # 25.12 installs the .apk, 24.10 the .ipk. They are the same build.
 
 REPO="VizzleTF/luci-app-footstrap-cmd"
-VERSION="0.1.0-r1"
-TAG="v0.1.0"
+VERSION="0.1.1-r1"
+TAG="v0.1.1"
 
 # The same author key luci-theme-footstrap is verified with — one author, one key,
 # and this feed already pins its public half.
