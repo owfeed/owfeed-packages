@@ -35,7 +35,7 @@ jobs:
     # Pinned to a release, not tracked at @main. This repository signs what it
     # publishes; the workflow that shapes the signing should move when someone
     # changes this line, not whenever an unrelated repository is pushed to.
-    uses: owfeed/owfeed/.github/workflows/feed.yml@v0.4.5
+    uses: owfeed/owfeed/.github/workflows/feed.yml@v0.5.0
     with:
       owfeed-version: v0.4.5
       dry-run: true
