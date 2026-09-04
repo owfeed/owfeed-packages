@@ -225,14 +225,24 @@ can be merged.")"
 
 		# Start the checks by hand, because GitHub will not start them by itself.
 		#
-		# `gh pr create` runs under GITHUB_TOKEN, so the pull request's author is
-		# `app/github-actions`, and this repository's approval policy
-		# (`fork-pr-contributor-approval` = `first_time_contributors`) holds that
-		# account's `pull_request` run in `action_required` until a person presses a
-		# button. Measured on #45: attempt 1 was created 2026-09-02 and never ran;
-		# attempt 2 ran two days later, triggered by a human. With required checks on
-		# `main` the pull request is BLOCKED for that whole time, and the automatic
-		# update stops being automatic -- which is what issue #11 is about.
+		# `gh pr create` runs under GITHUB_TOKEN, and GitHub holds the resulting run
+		# unconditionally: "when a workflow using `GITHUB_TOKEN` creates or updates a
+		# pull request, the resulting `pull_request` event creates workflow runs in an
+		# approval-required state". It is NOT this repository's approval policy --
+		# `fork-pr-contributor-approval` is `first_time_contributors`, and the hold does
+		# not depend on how many of the bot's pull requests merged before: #39 started
+		# its own run and merged in five seconds, #43 was held three hours later.
+		#
+		# Measured on #45: attempt 1 was created 2026-09-02 and never ran; attempt 2 ran
+		# two days later, triggered by a human. With required checks on `main` the pull
+		# request is BLOCKED for that whole time, and the automatic update stops being
+		# automatic -- which is what issue #11 is about.
+		#
+		# The documented fix is a different author, not a different policy: "use a
+		# GitHub App installation access token or a personal access token instead of
+		# `GITHUB_TOKEN` when creating or updating the pull request". Until that exists
+		# here, the dispatch below is the workaround -- it makes the checks run and
+		# report, but it does not make auto-merge fire (issue #53).
 		#
 		# `workflow_dispatch` is named in GitHub's own exception -- "`workflow_dispatch`
 		# and `repository_dispatch` events always create workflow runs" -- so the same
@@ -279,7 +289,10 @@ can be merged.")"
 		# request nobody knows is waiting.
 		if [ "$automerge" = "yes" ]; then
 			if gh pr merge --squash --auto --delete-branch "$url" >/dev/null 2>&1; then
-				echo "$name: will merge itself once the checks pass"
+				# Armed, not unattended: auto-merge waits for the held
+				# `pull_request` run rather than for the dispatch above, so the
+				# merge happens once a person approves that run -- issue #53.
+				echo "$name: auto-merge armed; it merges once the held pull_request run is approved"
 			else
 				echo "$name: AUTO-MERGE NOT ARMED -- the pull request is open and needs merging by hand"
 				echo "  either the repository has no 'Allow auto-merge', or the pull request is"

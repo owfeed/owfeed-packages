@@ -2,7 +2,7 @@
 
 *[ECOSYSTEM.md](https://github.com/owfeed/owfeed/blob/main/docs/ECOSYSTEM.md) in
 owfeed says where the boundaries between owlab, owfeed and this feed run and why.
-This file says how much of this feed's side of that exists, as of 2026-07-28.*
+This file says how much of this feed's side of that exists, as of 2026-09-04.*
 
 It lives here rather than in the shared document because a shared status file goes
 stale on exactly the facts none of its own CI touches. Beside the thing it
@@ -24,8 +24,9 @@ it is the last time the URL has to move.
 
 | | Evidence |
 |---|---|
-| Feed updates reaching a router | Released updater 1.2.0 → hourly bot opened a PR → auto-merge → publish → both branches offer `1.2.0-r1` |
-| Self-updater migrating off a content pin | 0.11.5 pinned by hash → `check` answers `v0.11.6` from the local index → upgrade lands and leaves the package unpinned |
+| Feed updates reaching a router | Upstream released 0.14.10 → the hourly bot opened #51 with the pins recomputed → a maintainer approved the held check → merge → `Publish` → the served 25.12 index carries `0.14.10-r1`, read from a router |
+| Publishing through owfeed's reusable workflow | `publish.yml` calls `feed.yml@v0.5.0` with `secrets: inherit`; a probe measured that a called job's `environment: feed` resolves against this repository, and the signing secrets reached it at their real length |
+| An author signature inside every package | `signing.author-keys: ./keys` in `owfeed.yml`, one EC public half pinned per package; an unsigned package is dropped from the index (OWF407) and `tools/check-tree.sh` then fails the publish, so a green publish is the evidence |
 | Auto-merge tier rules | Six scenarios exercised in a real git repository: manifest/minor merges, major bump holds, `binaries` holds, no `SIG_KEY` holds, a diff touching `SIG_KEY_ID` holds, the daily ceiling holds |
 | Verify before read | `tools/fetch.sh` checks the signature before parsing, and cross-checks `repo` and `tag` inside the manifest — the signature says *who*, never *what about* |
 | Ingest without a key | The build job runs contributed fetch scripts and never sees the signing key; the key appears only after the bytes are already in an artifact |
@@ -40,21 +41,26 @@ it is the last time the URL has to move.
 
 ## Not built, and why
 
-**`publish.yml` on owfeed's reusable `feed.yml`.** `pr.yml` has moved: it calls
-`feed.yml@v0.2.1` with `dry-run: true`, so a pull request now exercises the same
-file the publish path is written from, with throwaway keys and no environment.
-`publish.yml` has not, and the thing it turns on is narrow: whether a called job's
-`environment:` resolves against the caller's repository, where `feed` exists, or
-the called workflow's, where it does not. GitHub's documentation says the
-environment's secret is used and does not say whose environment. If it is
-owfeed's, the key is unreachable and the publish stops — loudly, and with the last
-deploy still live, but stopped.
-
-So the sequencing is: `pr.yml` proves everything about `feed.yml` that does not
-involve the real key, on every pull request and at no risk. When that has been
-green for a while, `publish.yml` becomes the same call with `secrets: inherit` and
-without `dry-run`. Migrating both at once would have meant finding out about the
-environment question from a feed that had stopped publishing.
+**An update that merges and publishes unattended.** `AUTO_MERGE="yes"` arms
+GitHub's auto-merge, and it still waits for a person. The hourly job opens its
+pull requests with `GITHUB_TOKEN`, and GitHub holds the resulting `pull_request`
+run in `action_required` unconditionally — "when a workflow using `GITHUB_TOKEN`
+creates or updates a pull request, the resulting `pull_request` event creates
+workflow runs in an approval-required state". It is not this repository's
+`fork-pr-contributor-approval` policy: that policy is `first_time_contributors`,
+and the hold does not depend on how many of the bot's pull requests have merged
+before. `check-updates.sh`
+dispatches `Check` on the update branch, which reports the contexts the branch
+protection requires, but auto-merge waits for the held run rather than for the
+dispatched one — measured on #51, where the dispatched run was green and the pull
+request stayed open until the held one was approved. Publishing after the merge is
+answered: `update.yml` dispatches `Publish` when the head of `main` has no
+`Publish` run, because a merge made with `GITHUB_TOKEN` raises no push event. Both
+halves are [issue #53](https://github.com/owfeed/owfeed-packages/issues/53), and
+GitHub names one fix for both: "use a GitHub App installation access token or a
+personal access token instead of `GITHUB_TOKEN` when creating or updating the pull
+request". Such a token also raises the push event, so `Publish` would need no
+dispatch either.
 
 **A consumer job on top of the check.** `owfeed smoke` proves the channel installs
 without `--allow-untrusted`; nothing yet proves the package that came through it
@@ -74,17 +80,9 @@ requested on pull requests the update job itself opened, and that job writes one
 `upstream.sh`. The review becomes a mechanism on the day there is a second
 maintainer, and until then it is a convention.
 
-**An author signature on any package here.** No package carries an in-package EC
-signature from its author, and since `signing.sign-packages: false` the feed adds
-none of its own either — so what routers install is an unsigned file inside a signed
-index. That works, and was measured working, but it means the additive-signature
-property `CONTRIBUTING.md` describes is demonstrated by nothing. `owfeed sign` needs
-no feed config, so the tooling is not the obstacle: it needs an author to generate a
-key and add a repository secret.
-
 ## Known contradictions
 
-One key, `keys/vizzletf-release.pub`, covers two upstream repositories while
+One key, `keys/vizzletf-release.pub`, covers four upstream repositories while
 `keys/README.md` asks for one key per repository. `owfeed verify-artifact` checks
 the manifest's `repo` line, so a manifest cannot be lifted from one to the other
 and the shared key is tolerable — what separate keys would buy is blast radius,

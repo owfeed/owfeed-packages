@@ -246,6 +246,10 @@ relicense. `tools/sources.sh` reads it out of the built index before the publish
 copyleft package that has no source for that exact version, so this is enforced rather than
 remembered.
 
+One `packages/<name>/` entry can publish several packages: with `KIND="manifest"` the archive of one
+tag is the corresponding source for every package in that release, and it is served under each of
+their names.
+
 ### Your package says where it came from
 
 One field, set where your package is built:
@@ -319,6 +323,12 @@ checksum served by the same host as the artifact tells you the download was not 
 it was not replaced.
 
 The checks are never skipped either way.
+
+**It does not merge unattended today.** The hourly job opens its pull requests as
+`app/github-actions`, and this repository holds that account's checks until a maintainer approves
+them, so an armed auto-merge waits for that approval — [issue
+#53](https://github.com/owfeed/owfeed-packages/issues/53). What `AUTO_MERGE="yes"` buys right now is
+one click instead of a review of the diff.
 
 ---
 
@@ -460,8 +470,10 @@ Refused in every shape:
   notifications, and every one of them verifies. The third waits for a person.
 
 A pull request that adds or changes anything under `keys/` is never merged automatically, whatever
-its `AUTO_MERGE` says — `.github/CODEOWNERS` requires a human review on that directory, because
-adding a key is the entire trust decision compressed into four lines.
+its `AUTO_MERGE` says. Auto-merge is only ever armed on a pull request the hourly job opened, and
+that job writes one `packages/<name>/upstream.sh` and nothing else. `.github/CODEOWNERS` names
+`keys/`, so a review is requested there — no branch rule requires it yet, for the reason in
+[`keys/README.md`](keys/README.md).
 
 Both still open the pull request. They decline to merge it.
 
