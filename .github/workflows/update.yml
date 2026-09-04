@@ -18,6 +18,20 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
+    # `actions: write` is one thing: `check-updates.sh` dispatches `pr.yml` on each
+    # update branch after opening the pull request, because a pull request authored
+    # by `app/github-actions` gets a `pull_request` run that sits in
+    # `action_required` until a person approves it (measured on #45). Without it the
+    # dispatch is a 403 and the pull request stays blocked by its own checks.
+    #
+    # Written out in full rather than added to: naming any scope in a job-level
+    # block sets every scope this job does not name to none, so the two the
+    # workflow already grants have to be repeated here or pushing the branch and
+    # opening the pull request stop working.
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -50,11 +64,12 @@ jobs:
   # environment -- the signing keys -- behind an event any pull request can reach.
   #
   # Why it asks whether `main` is published rather than dispatching after the merge
-  # call: `--auto` only arms. It merges immediately today because `main` has no
-  # required status checks (#11), and the moment that is fixed a dispatch fired next
-  # to `gh pr merge` would publish the commit *before* the update. Comparing `main`
-  # against the commits Publish has already run for is right in both worlds -- this
-  # run publishes what it just merged, and a later merge is picked up by the next
+  # call: `--auto` only arms. `main` now carries required status checks (`check /
+  # build` and `check / check`), so the merge lands once they report rather than at
+  # the moment the call returns -- and a dispatch fired next to `gh pr merge` would
+  # publish the commit *before* the update. Comparing `main` against the commits
+  # Publish has already run for is right either way -- a merge that completes inside
+  # this run publishes what it just merged, and a later one is picked up by the next
   # hourly run. It is also idempotent: a human merge does raise the push event, that
   # run exists for the commit, and this dispatches nothing.
   publish:

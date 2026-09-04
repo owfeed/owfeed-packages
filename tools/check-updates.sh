@@ -223,6 +223,39 @@ feed, indexes it, runs \`owfeed doctor\`, and installs the result on a real Open
 can be merged.")"
 		echo "$name: $url"
 
+		# Start the checks by hand, because GitHub will not start them by itself.
+		#
+		# `gh pr create` runs under GITHUB_TOKEN, so the pull request's author is
+		# `app/github-actions`, and this repository's approval policy
+		# (`fork-pr-contributor-approval` = `first_time_contributors`) holds that
+		# account's `pull_request` run in `action_required` until a person presses a
+		# button. Measured on #45: attempt 1 was created 2026-09-02 and never ran;
+		# attempt 2 ran two days later, triggered by a human. With required checks on
+		# `main` the pull request is BLOCKED for that whole time, and the automatic
+		# update stops being automatic -- which is what issue #11 is about.
+		#
+		# `workflow_dispatch` is named in GitHub's own exception -- "`workflow_dispatch`
+		# and `repository_dispatch` events always create workflow runs" -- so the same
+		# token that could not start the `pull_request` run can start this one. Check
+		# runs bind to a commit, not to an event, and the head of `$branch` is the pull
+		# request's head commit, so the run reports the very contexts the branch
+		# protection is waiting for. It publishes nothing: `pr.yml` passes
+		# `dry-run: true`, which is what `feed.yml`'s publish job is gated on.
+		#
+		# Before arming auto-merge below, deliberately: `--auto` refuses a pull request
+		# that has nothing left to wait for, and this is what gives it something.
+		#
+		# NOT ALLOWED TO FAIL THE RUN, for the same reason as auto-merge: the pull
+		# request exists by this line and every package after this one still has to be
+		# checked. Reported rather than swallowed -- a silent failure here leaves a
+		# pull request whose checks nobody will ever start.
+		if gh workflow run pr.yml --ref "$branch" >/dev/null 2>&1; then
+			echo "$name: checks dispatched on $branch"
+		else
+			echo "$name: CHECKS NOT DISPATCHED -- the pull request is open and its checks are not running"
+			echo "  run 'gh workflow run pr.yml --ref $branch', or approve the waiting run by hand"
+		fi
+
 		# Auto-merge is offered only where someone other than this feed vouches for the
 		# bytes. This asks GitHub to merge once the checks pass; it does not skip them.
 		#
