@@ -15,10 +15,12 @@ name: Check
 
 # `workflow_dispatch` is load-bearing, not a convenience for re-running by hand.
 # The hourly update job opens its pull requests with `gh pr create` under
-# GITHUB_TOKEN, so their author is `app/github-actions`, and this repository's
-# `fork-pr-contributor-approval` policy is `first_time_contributors`: the
-# `pull_request` run is created and then held in `action_required` until a person
-# presses a button. Measured on #45 -- attempt 1 created 2026-09-02 and never ran,
+# GITHUB_TOKEN, and GitHub holds the resulting run unconditionally: "when a workflow
+# using `GITHUB_TOKEN` creates or updates a pull request, the resulting
+# `pull_request` event creates workflow runs in an approval-required state". Not this
+# repository's `fork-pr-contributor-approval` policy -- that is
+# `first_time_contributors`, and the hold does not depend on the bot's history.
+# Measured on #45 -- attempt 1 created 2026-09-02 and never ran,
 # attempt 2 started two days later once a human triggered it. With required checks
 # on `main` that pull request is BLOCKED for as long as nobody looks.
 #

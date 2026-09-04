@@ -43,17 +43,24 @@ it is the last time the URL has to move.
 
 **An update that merges and publishes unattended.** `AUTO_MERGE="yes"` arms
 GitHub's auto-merge, and it still waits for a person. The hourly job opens its
-pull requests as `app/github-actions`, and this repository's
-`fork-pr-contributor-approval` policy is `first_time_contributors`, so that
-account's `pull_request` run is held in `action_required`. `check-updates.sh`
+pull requests with `GITHUB_TOKEN`, and GitHub holds the resulting `pull_request`
+run in `action_required` unconditionally — "when a workflow using `GITHUB_TOKEN`
+creates or updates a pull request, the resulting `pull_request` event creates
+workflow runs in an approval-required state". It is not this repository's
+`fork-pr-contributor-approval` policy: that policy is `first_time_contributors`,
+and the hold does not depend on how many of the bot's pull requests have merged
+before. `check-updates.sh`
 dispatches `Check` on the update branch, which reports the contexts the branch
 protection requires, but auto-merge waits for the held run rather than for the
 dispatched one — measured on #51, where the dispatched run was green and the pull
 request stayed open until the held one was approved. Publishing after the merge is
 answered: `update.yml` dispatches `Publish` when the head of `main` has no
 `Publish` run, because a merge made with `GITHUB_TOKEN` raises no push event. Both
-halves are [issue #53](https://github.com/owfeed/owfeed-packages/issues/53); the
-fix for the first is a pull-request author the approval policy does not hold.
+halves are [issue #53](https://github.com/owfeed/owfeed-packages/issues/53), and
+GitHub names one fix for both: "use a GitHub App installation access token or a
+personal access token instead of `GITHUB_TOKEN` when creating or updating the pull
+request". Such a token also raises the push event, so `Publish` would need no
+dispatch either.
 
 **A consumer job on top of the check.** `owfeed smoke` proves the channel installs
 without `--allow-untrusted`; nothing yet proves the package that came through it

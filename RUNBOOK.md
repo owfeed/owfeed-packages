@@ -25,9 +25,11 @@ reusable `feed.yml` at the same pinned tag: `pr.yml` with `dry-run: true`, `publ
 **Why the hourly job dispatches two workflows.** Everything it does happens under `GITHUB_TOKEN`, and
 neither event that would normally start a run does. A pull request opened by `app/github-actions`
 gets a `pull_request` run that is created and then held in `action_required` until a person approves
-it — this repository's `fork-pr-contributor-approval` policy is `first_time_contributors`, and #45
-measured the wait at two days — so with required checks on `main` the pull request sits blocked and
-the automatic update is not automatic. A merge made with the same token raises no `push` event at
+it. That hold is unconditional for this token — "when a workflow using `GITHUB_TOKEN` creates or
+updates a pull request, the resulting `pull_request` event creates workflow runs in an
+approval-required state" — and not a consequence of this repository's
+`fork-pr-contributor-approval` policy. #45 measured the wait at two days. With required checks on
+`main` the pull request sits blocked and the automatic update is not automatic. A merge made with the same token raises no `push` event at
 all. `workflow_dispatch` is the documented exception in both cases: those events always create runs.
 
 The dispatch of `Check` runs on the head of the update branch, which is the pull request's head

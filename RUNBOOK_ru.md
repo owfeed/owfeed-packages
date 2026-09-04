@@ -26,8 +26,10 @@
 **Почему часовой job запускает два workflow вручную.** Всё, что он делает, происходит под
 `GITHUB_TOKEN`, и ни одно событие, которое обычно поднимает запуск, не поднимается. У pull request'а,
 открытого `app/github-actions`, запуск `pull_request` создаётся и встаёт в `action_required`, пока
-его не одобрит человек: политика репозитория `fork-pr-contributor-approval` — `first_time_contributors`,
-и на #45 ожидание составило двое суток. С обязательными проверками на `main` такой pull request висит
+его не одобрит человек. Этот холд безусловен для данного токена — «when a workflow using
+`GITHUB_TOKEN` creates or updates a pull request, the resulting `pull_request` event creates
+workflow runs in an approval-required state» — и не следует из политики репозитория
+`fork-pr-contributor-approval`. На #45 ожидание составило двое суток. С обязательными проверками на `main` такой pull request висит
 заблокированным, и автообновление перестаёт быть автоматическим. Мерж под тем же токеном не поднимает
 событие `push` вообще. `workflow_dispatch` — задокументированное исключение в обоих случаях: такие
 события всегда создают запуск.
