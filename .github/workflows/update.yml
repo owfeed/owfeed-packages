@@ -30,3 +30,60 @@ jobs:
           git config user.name  "owfeed-bot"
           git config user.email "owfeed-bot@users.noreply.github.com"
           ./tools/check-updates.sh
+
+  # An update that merges itself leaves the feed unpublished, and nothing says so.
+  #
+  # `publish.yml` triggers on `push: branches: [main]`. The merge is performed by
+  # `gh pr merge --auto` under this job's GITHUB_TOKEN, and "events triggered by the
+  # GITHUB_TOKEN will not create a new workflow run" -- so the push lands on `main`
+  # and the trigger does not. `Check upstreams` goes green, the pull request shows
+  # merged, and repo.owfeed.org keeps serving the previous version until somebody
+  # dispatches Publish by hand. A router upgrading in that window gets the old
+  # package.
+  #
+  # `workflow_dispatch` is the one way out that does not need a credential: it is
+  # named in GitHub's own exception -- "`workflow_dispatch` and `repository_dispatch`
+  # events always create workflow runs" -- so a dispatch from GITHUB_TOKEN runs where
+  # its push would not. The neighbouring trigger, `pull_request_target: closed`, is
+  # not an option twice over: a merge made by GITHUB_TOKEN raises no `pull_request`
+  # run either (`closed` is not among the exceptions), and it would put the `feed`
+  # environment -- the signing keys -- behind an event any pull request can reach.
+  #
+  # Why it asks whether `main` is published rather than dispatching after the merge
+  # call: `--auto` only arms. It merges immediately today because `main` has no
+  # required status checks (#11), and the moment that is fixed a dispatch fired next
+  # to `gh pr merge` would publish the commit *before* the update. Comparing `main`
+  # against the commits Publish has already run for is right in both worlds -- this
+  # run publishes what it just merged, and a later merge is picked up by the next
+  # hourly run. It is also idempotent: a human merge does raise the push event, that
+  # run exists for the commit, and this dispatches nothing.
+  publish:
+    needs: check
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    # No checkout, on purpose. `actions: write` is what dispatching a workflow costs,
+    # and this job never has a working tree for it to be in scope with. The keys stay
+    # where they were: the dispatched run reaches `environment: feed`, this one holds
+    # nothing but the right to start it.
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - name: Publish main if no Publish run covers it
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          head="$(gh api "repos/$GITHUB_REPOSITORY/commits/main" -q .sha)"
+
+          # Any status, not just success: one publish attempt per commit. A failed
+          # publish is red and visible; re-dispatching it every hour would be an
+          # hourly red run that fails for the same reason each time.
+          if gh run list --workflow publish.yml --branch main --limit 20 \
+               --json headSha -q '.[].headSha' | grep -qxF "$head"; then
+            echo "main $head already has a Publish run"
+            exit 0
+          fi
+
+          echo "main $head has no Publish run: dispatching"
+          gh workflow run publish.yml --ref main

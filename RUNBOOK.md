@@ -12,6 +12,7 @@ Operating the feed. For adding or updating a package, see [CONTRIBUTING.md](CONT
 | push to `main` | job 1: fetch → build | **no** |
 | | job 2: sign → index → check-tree → check-origin → sources → smoke → verify → publish → Pages | **yes**, behind `environment: feed` |
 | hourly | ask each upstream for its latest release; open a pull request if there is one | no |
+| | dispatch `Publish` when the head of `main` has no `Publish` run of its own | no |
 
 The split on `main` is the point: the fetch scripts execute values contributed by pull requests, and
 that job has no key. The key appears only after the built bytes are already in an artifact.
@@ -186,8 +187,11 @@ they published somewhere else, anything that is not the release you are about to
 
 ## Things that are not automatic, on purpose
 
-**Publishing is not.** The hourly job proposes; it never signs. A job that fetched whatever an
-upstream pushed in the last hour and signed it would hand this feed's key to every upstream at once.
+**Publishing is not.** The hourly job proposes; it never signs. What it may do is dispatch
+`Publish` for a commit already on `main` — a merge made with `GITHUB_TOKEN` raises no push event,
+so without that the feed would keep serving the previous version. The key is never in that job; it
+is in the run it starts. A job that fetched whatever an upstream pushed in the last hour and signed
+it would hand this feed's key to every upstream at once.
 
 **Merging is not, unless the author signed — and not more than twice a day.** `AUTO_MERGE="yes"` is
 offered only where a detached signature is verified against a pinned key, only for shapes whose
