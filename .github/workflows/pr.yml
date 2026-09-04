@@ -13,9 +13,39 @@ name: Check
 # job is for, and it is why publish.yml has not moved here yet: see the comment
 # at the top of it.
 
+# `workflow_dispatch` is load-bearing, not a convenience for re-running by hand.
+# The hourly update job opens its pull requests with `gh pr create` under
+# GITHUB_TOKEN, so their author is `app/github-actions`, and this repository's
+# `fork-pr-contributor-approval` policy is `first_time_contributors`: the
+# `pull_request` run is created and then held in `action_required` until a person
+# presses a button. Measured on #45 -- attempt 1 created 2026-09-02 and never ran,
+# attempt 2 started two days later once a human triggered it. With required checks
+# on `main` that pull request is BLOCKED for as long as nobody looks.
+#
+# GitHub's own exception is the way out and needs no credential: "`workflow_dispatch`
+# and `repository_dispatch` events always create workflow runs". `check-updates.sh`
+# dispatches this workflow on the update branch after opening the pull request, and
+# because check runs bind to a commit rather than to an event -- and the head of
+# `update/...` IS the pull request's head commit -- the same `check / build` and
+# `check / check` contexts are reported and the pull request unblocks.
+#
+# Nothing about that path reaches a key. `dry-run: true` below is a constant, and
+# `feed.yml`'s publish job is gated on `if: !inputs.dry-run` -- not on the event and
+# not on the ref -- so a dispatch cannot open the `feed` environment any more than a
+# pull request can.
 on:
   pull_request:
   workflow_dispatch:
+
+# One run per branch, because the two triggers above can both fire for the same
+# commit: when approval turns out not to be required, the `pull_request` run starts
+# and then `check-updates.sh` dispatches a second run of the same thing. `head_ref`
+# on a pull request and `ref_name` on a dispatch are both the update branch, so the
+# dispatch supersedes the run it duplicates instead of burning a second hour of
+# runners on 25.12 and 24.10 smoke tests.
+concurrency:
+  group: check-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
 
 permissions:
   contents: read

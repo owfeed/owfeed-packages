@@ -12,6 +12,7 @@ Operating the feed. For adding or updating a package, see [CONTRIBUTING.md](CONT
 | push to `main` | job 1: fetch → build | **no** |
 | | job 2: sign → index → check-tree → check-origin → sources → smoke → verify → publish → Pages | **yes**, behind `environment: feed` |
 | hourly | ask each upstream for its latest release; open a pull request if there is one | no |
+| | dispatch `Check` on the update branch, because the pull request's own run waits for approval | throwaway ones |
 | | dispatch `Publish` when the head of `main` has no `Publish` run of its own | no |
 
 The split on `main` is the point: the fetch scripts execute values contributed by pull requests, and
@@ -22,6 +23,20 @@ reusable `feed.yml` with `dry-run: true`, which is the same file the publish pat
 the difference being throwaway keys, no environment and no deploy. `publish.yml` is still written out
 by hand, for the reason at the top of it; the comment there says what has to be true before it moves
 too.
+
+**Why the hourly job dispatches two workflows.** Everything it does happens under `GITHUB_TOKEN`, and
+neither event that would normally start a run does. A pull request opened by `app/github-actions`
+gets a `pull_request` run that is created and then held in `action_required` until a person approves
+it — this repository's `fork-pr-contributor-approval` policy is `first_time_contributors`, and #45
+measured the wait at two days — so with required checks on `main` the pull request sits blocked and
+the automatic update is not automatic. A merge made with the same token raises no `push` event at
+all. `workflow_dispatch` is the documented exception in both cases: those events always create runs.
+
+The dispatch of `Check` runs on the head of the update branch, which is the pull request's head
+commit, and check runs bind to a commit rather than to an event — so it reports the same `check /
+build` and `check / check` contexts the branch protection is waiting for. It publishes nothing:
+`pr.yml` passes `dry-run: true`, and `feed.yml`'s publish job is gated on that input and not on the
+event or the ref, so no dispatch can reach the `feed` environment.
 
 **How owfeed gets here.** `owfeed/owfeed/setup@v0.4.0`, pinned to a release. The action downloads
 one binary and checks it against the build attestation from owfeed's own release workflow before
