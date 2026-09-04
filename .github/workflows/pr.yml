@@ -37,14 +37,28 @@ on:
   pull_request:
   workflow_dispatch:
 
-# One run per branch, because the two triggers above can both fire for the same
-# commit: when approval turns out not to be required, the `pull_request` run starts
-# and then `check-updates.sh` dispatches a second run of the same thing. `head_ref`
-# on a pull request and `ref_name` on a dispatch are both the update branch, so the
-# dispatch supersedes the run it duplicates instead of burning a second hour of
-# runners on 25.12 and 24.10 smoke tests.
+# One run per branch PER TRIGGER, and the second half of that is the load-bearing
+# part. A newer push to the same branch should still supersede the run it makes
+# obsolete, which is what a per-branch group buys.
+#
+# What it must NOT do is let the two triggers above cancel each other. They can both
+# fire for the same commit -- when approval turns out not to be required, the
+# `pull_request` run starts and `check-updates.sh` dispatches a second run of the same
+# thing -- and a shared group made the dispatch cancel it. That looks like a saving and
+# is a trap: a cancelled check run STAYS on the pull request. Measured on #49 --
+#
+#   check / build  | completed success   | run 33895864611  (the dispatch)
+#   check / build  | completed cancelled | run 33895851525  (what it cancelled)
+#
+# -- and with both present the pull request read `check / build  fail` and stayed
+# BLOCKED with a green dispatch sitting right there. Since the whole reason the
+# dispatch exists is that a `pull_request` run may be held in `action_required`, a
+# shared group could cancel a run that had not started and block the branch for good.
+#
+# Two duplicate runs cost an hour of runners. A pull request nobody can merge costs
+# more, and does not announce itself.
 concurrency:
-  group: check-${{ github.head_ref || github.ref_name }}
+  group: check-${{ github.event_name }}-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
 permissions:
