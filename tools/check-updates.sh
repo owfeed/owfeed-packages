@@ -98,6 +98,19 @@ may_automerge() {
 	return 0
 }
 
+# The branch to return to after each package, taken by name rather than by history.
+# `git checkout -` is `@{-1}`, which needs a branch switch recorded in the HEAD
+# reflog. In the clone the job works in that record is not there, so the first
+# `checkout -b` of a run leaves nothing to go back to and `-` is read as a pathspec:
+#
+#   error: pathspec '-' did not match any file(s) known to git
+#
+# Under `set -e` that failed the run after the pull request was already open -- which
+# reads as "no update was found" -- and skipped every package after this one.
+# Reproduced by emulating the job's clone with `core.logAllRefUpdates false`; a plain
+# local `git checkout -b x` does write the reflog and does not show it.
+BASE="$(git rev-parse --abbrev-ref HEAD)"
+
 for up in packages/*/upstream.sh; do
 	dir="$(dirname "$up")"
 	name="$(basename "$dir")"
@@ -240,7 +253,7 @@ can be merged.")"
 				echo "  already mergeable and GitHub has nothing to wait for"
 			fi
 		fi
-		git checkout -q -
+		git checkout -q "$BASE"
 		git checkout -q "$up"
 	)
 done
