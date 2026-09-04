@@ -35,8 +35,14 @@ things have to hold, and only the first is usually checked:
 | package | licence | redistribution | trademark policy |
 |---|---|---|---|
 | `luci-theme-footstrap` | Apache-2.0 | permitted, with NOTICE and change statements | none published |
-| `luci-app-footstrap-updater` | Apache-2.0 | same | none published |
+| `luci-app-footstrap-cmd` | Apache-2.0 | same | none published |
+| `luci-app-footstrap-files` | Apache-2.0 | same | none published |
+| `luci-app-gitbackup` | GPL-2.0-only | permitted, with corresponding source served from this feed | none published |
 | `podkop-updater` | MIT | permitted | none published |
+
+Each row is one `packages/<name>/` entry. An entry whose upstream publishes a signed manifest
+publishes several packages — a backend, the LuCI page, a translation catalogue — out of one tagged
+release, and they share that release's source archive.
 
 ### `podkop-updater` declared a licence it did not have
 
@@ -72,11 +78,11 @@ Read plainly, the policy allows what a feed does:
 So an unmodified copy, under its own name, with its notices intact, is within the policy. What is
 not: presenting it as official or endorsed, and using the name for anything modified.
 
-**Where that bites owfeed.** `owfeed sign` appends this feed's signature to the package file. The
-payload is untouched, but the artifact's bytes are not the ones upstream published. Whether that is
-still "an unmodified copy" is a judgement, and it is the feed's to defend rather than assume. The
-honest position: the *contents* are unmodified and the pin proves it, but the *file* is not
-byte-identical to upstream's, and a user comparing checksums will notice.
+**Where that used to bite owfeed.** `owfeed sign` appends a signature to the package file, so the
+artifact's bytes would not have been the ones upstream published. `owfeed.yml` now sets
+`signing.sign-packages: false`: this feed signs the index and nothing else, and what it distributes
+is the author's file byte for byte. An unmodified copy is unmodified in the sense a user comparing
+checksums can check.
 
 Rebuilding a package from source would be a further step again. That artifact is this feed's build,
 not upstream's, and publishing it under the upstream name is much closer to what the policy

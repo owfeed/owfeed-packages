@@ -279,7 +279,10 @@ can be merged.")"
 		# request nobody knows is waiting.
 		if [ "$automerge" = "yes" ]; then
 			if gh pr merge --squash --auto --delete-branch "$url" >/dev/null 2>&1; then
-				echo "$name: will merge itself once the checks pass"
+				# Armed, not unattended: auto-merge waits for the held
+				# `pull_request` run rather than for the dispatch above, so the
+				# merge happens once a person approves that run -- issue #53.
+				echo "$name: auto-merge armed; it merges once the held pull_request run is approved"
 			else
 				echo "$name: AUTO-MERGE NOT ARMED -- the pull request is open and needs merging by hand"
 				echo "  either the repository has no 'Allow auto-merge', or the pull request is"

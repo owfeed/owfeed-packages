@@ -25,7 +25,7 @@ that is not the release you are about to trust it for.
 
 | key | id | covers |
 |---|---|---|
-| `vizzletf-release.pub` | `18c63865e2bcf8d6` | `luci-theme-footstrap`, `luci-app-footstrap-updater`, `luci-app-footstrap-cmd`, `luci-app-footstrap-files` |
+| `vizzletf-release.pub` | `18c63865e2bcf8d6` | `luci-theme-footstrap`, `luci-app-footstrap-cmd`, `luci-app-footstrap-files`, `luci-app-gitbackup` |
 | `podkop-updater.pub` | `37ddece4c0eef357` | `podkop-updater` |
 
 ### EC — package signatures, checked on the router by anyone who wants to
@@ -35,9 +35,9 @@ One per repository, which is what the note below asks for and what these meet.
 | key | identity | covers |
 |---|---|---|
 | `luci-theme-footstrap.pub.pem` | `9bdfe74fb2b896642afbdebd9a4d653c` | `luci-theme-footstrap` |
-| `luci-app-footstrap-updater.pub.pem` | `19e4d189964d99db0a3b6ba04edb4552` | `luci-app-footstrap-updater` |
 | `luci-app-footstrap-cmd.pub.pem` | `89d0f51c214fb6d9aeb71558ec3dddf4` | `luci-app-footstrap-cmd` |
 | `luci-app-footstrap-files.pub.pem` | `b965f2fd1eb4a823b2e1f98736ce8572` | `luci-app-footstrap-files` |
+| `luci-app-gitbackup.pub.pem` | `ed03b80eb79ce317685eb5edc6b23dd0` | `luci-app-gitbackup` |
 | `podkop-updater.pub.pem` | `2e6784ccfa5af1f908b5904d26067249` | `podkop-updater` |
 
 `signing.author-keys` in `owfeed.yml` points at this directory, and `owfeed doctor` fails any

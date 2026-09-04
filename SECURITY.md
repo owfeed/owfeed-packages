@@ -102,5 +102,8 @@ The signing keys exist only as repository secrets and only in the publish job, w
 an environment and runs after the build. Pull requests build the whole feed with throwaway keys,
 so a fork never comes near the real ones. `.gitignore` covers `*.pem`, `*.key` and `*.sec`.
 
-Adding or changing anything under `keys/` requires human review — `.github/CODEOWNERS` enforces
-it — because pinning a key is the entire trust decision compressed into four lines.
+Adding or changing anything under `keys/` is read by a person, because pinning a key is the entire
+trust decision compressed into four lines. `.github/CODEOWNERS` requests that review; no branch rule
+requires it yet, and with a single maintainer one would block every key addition rather than gate
+it. No automatic merge reaches `keys/`: auto-merge is only ever armed on the hourly job's own pull
+requests, and those write one `packages/<name>/upstream.sh`.

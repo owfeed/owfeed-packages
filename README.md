@@ -161,8 +161,14 @@ would make the checksum pins decoration: recomputed from whatever arrived, they 
 nothing.
 
 Where an upstream publishes a detached signature beside its artifact, that is provenance from
-someone other than this feed, and the package may set `AUTO_MERGE="yes"` so the pull request merges
-itself once the checks pass. The checks still have to pass.
+someone other than this feed, and the package may set `AUTO_MERGE="yes"`, which asks GitHub to merge
+the pull request once its checks pass.
+
+**An update still waits for a person today.** The pull request is opened by `app/github-actions`,
+and this repository holds that account's checks for approval, so nothing merges — and nothing is
+published — until a maintainer approves the run. That is
+[issue #53](https://github.com/owfeed/owfeed-packages/issues/53). The checks are never skipped
+either way.
 
 ## Whose packages these are
 

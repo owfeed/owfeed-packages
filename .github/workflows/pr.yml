@@ -10,8 +10,8 @@ name: Check
 # request from a fork reaches all of it and the feed's key is nowhere near.
 #
 # What it still cannot prove is that the real key works. That is what the publish
-# job is for, and it is why publish.yml has not moved here yet: see the comment
-# at the top of it.
+# job is for: publish.yml calls the same file without `dry-run`, with the signing
+# keys reached through `environment: feed`.
 
 # `workflow_dispatch` is load-bearing, not a convenience for re-running by hand.
 # The hourly update job opens its pull requests with `gh pr create` under
@@ -27,7 +27,9 @@ name: Check
 # dispatches this workflow on the update branch after opening the pull request, and
 # because check runs bind to a commit rather than to an event -- and the head of
 # `update/...` IS the pull request's head commit -- the same `check / build` and
-# `check / check` contexts are reported and the pull request unblocks.
+# `check / check` contexts are reported, which is what the branch protection asks
+# for. It does not unblock the merge: auto-merge waits for the held `pull_request`
+# run, so a person still has to approve that one. Measured on #51; issue #53.
 #
 # Nothing about that path reaches a key. `dry-run: true` below is a constant, and
 # `feed.yml`'s publish job is gated on `if: !inputs.dry-run` -- not on the event and

@@ -18,11 +18,9 @@ Operating the feed. For adding or updating a package, see [CONTRIBUTING.md](CONT
 The split on `main` is the point: the fetch scripts execute values contributed by pull requests, and
 that job has no key. The key appears only after the built bytes are already in an artifact.
 
-The pull-request row is not a second pipeline that resembles the first. `pr.yml` calls owfeed's
-reusable `feed.yml` with `dry-run: true`, which is the same file the publish path is written from —
-the difference being throwaway keys, no environment and no deploy. `publish.yml` is still written out
-by hand, for the reason at the top of it; the comment there says what has to be true before it moves
-too.
+The pull-request row is not a second pipeline that resembles the first. Both workflows call owfeed's
+reusable `feed.yml` at the same pinned tag: `pr.yml` with `dry-run: true`, `publish.yml` with
+`secrets: inherit` and no dry-run. The difference is throwaway keys, no environment and no deploy.
 
 **Why the hourly job dispatches two workflows.** Everything it does happens under `GITHUB_TOKEN`, and
 neither event that would normally start a run does. A pull request opened by `app/github-actions`
@@ -38,7 +36,14 @@ build` and `check / check` contexts the branch protection is waiting for. It pub
 `pr.yml` passes `dry-run: true`, and `feed.yml`'s publish job is gated on that input and not on the
 event or the ref, so no dispatch can reach the `feed` environment.
 
-**How owfeed gets here.** `owfeed/owfeed/setup@v0.4.0`, pinned to a release. The action downloads
+**The dispatch does not make an update merge on its own.** A green dispatched run is not what
+auto-merge waits for: the held `pull_request` run stays on the pull request, and the merge happens
+only after somebody presses *Approve and run* on it. Measured on #51, where the dispatched run was
+green and the pull request stayed open until a person approved the held one — that is
+[issue #53](https://github.com/owfeed/owfeed-packages/issues/53), and it is open. Every update
+therefore needs one click from a maintainer before anything merges or publishes.
+
+**How owfeed gets here.** `owfeed/owfeed/setup@v0.5.0`, pinned to a release. The action downloads
 one binary and checks it against the build attestation from owfeed's own release workflow before
 running it — not against a checksum from the same release, which whoever replaced the binary could
 replace too. It used to be `go install …@<sha>`, which compiled the tool on every job and verified
@@ -80,7 +85,7 @@ there, and every check passes. That is how a tree carrying one of three packages
 its 24.10 line once reported itself ready to publish.
 
 ```
-MISSING luci-theme-footstrap 0.11.6-r1 on 24.10: absent from 36 of 36 architectures (e.g. armeb_xscale)
+MISSING luci-theme-footstrap luci-theme-footstrap_0.11.6-r1_all.ipk on 24.10: absent from 36 of 36 architecture(s) (e.g. armeb_xscale)
 ```
 
 Absent from *all* architectures means the fetch produced nothing: the release has no
@@ -211,7 +216,9 @@ it would hand this feed's key to every upstream at once.
 **Merging is not, unless the author signed — and not more than twice a day.** `AUTO_MERGE="yes"` is
 offered only where a detached signature is verified against a pinned key, only for shapes whose
 signature covers what changed (`manifest` always, `apk` while the container set holds, `binaries`
-never), and never for a third update to the same package inside 24 hours. A stolen key publishes a
+never), and never for a third update to the same package inside 24 hours. Even where it is armed, no
+update merges unattended today: the pull request's own `pull_request` run is held for approval and
+auto-merge waits for it (issue #53). A stolen key publishes a
 chain of releases faster than anyone reads the notifications, and every one of them verifies.
 
 **Architecture coverage is not.** `owfeed.lock` records which architectures the feed publishes for,
