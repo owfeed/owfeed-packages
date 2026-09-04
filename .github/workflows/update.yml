@@ -91,14 +91,26 @@ jobs:
           set -eu
           head="$(gh api "repos/$GITHUB_REPOSITORY/commits/main" -q .sha)"
 
+          # `-R` on every gh call, because this job has no checkout: gh falls back to
+          # `git remote` to decide which repository it is talking about, and without a
+          # working tree that is `failed to determine base repo: fatal: not a git
+          # repository`. Measured -- the first run of this job failed exactly there.
+          #
+          # The list is captured rather than piped into grep for the same reason. A
+          # pipeline reports the exit status of its last command, so a failing
+          # `gh run list` reached grep as empty output and read as "no Publish run has
+          # ever covered this commit" -- the one answer that makes this job dispatch.
+          # An error that turns into a false negative is worse than an error that stops.
+          runs="$(gh run list -R "$GITHUB_REPOSITORY" --workflow publish.yml \
+                    --branch main --limit 20 --json headSha -q '.[].headSha')"
+
           # Any status, not just success: one publish attempt per commit. A failed
           # publish is red and visible; re-dispatching it every hour would be an
           # hourly red run that fails for the same reason each time.
-          if gh run list --workflow publish.yml --branch main --limit 20 \
-               --json headSha -q '.[].headSha' | grep -qxF "$head"; then
+          if printf '%s\n' "$runs" | grep -qxF "$head"; then
             echo "main $head already has a Publish run"
             exit 0
           fi
 
           echo "main $head has no Publish run: dispatching"
-          gh workflow run publish.yml --ref main
+          gh workflow run publish.yml -R "$GITHUB_REPOSITORY" --ref main

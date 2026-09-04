@@ -73,6 +73,16 @@ download() {
 # offers, and what it handed out stays identifiable. Whether that archive is complete
 # corresponding source is upstream's assertion, not this feed's -- the same assertion
 # every other consumer of that release already relies on.
+#
+# One tag, and every package built from it. An entry is not a package: KIND="manifest"
+# is one release and all the packages in it -- a daemon, the LuCI page that drives it,
+# the translation catalogue that goes with both -- and that one archive is the
+# corresponding source for each of them. tools/sources.sh asks for source by the
+# package name the index carries, never by the directory this repository keeps the
+# entry in, so the archive is served under every one of those names. Staging it under
+# the entry's name alone published source for whichever package happened to share the
+# directory name and left the rest of the release reading as sourceless, which refuses
+# the publish of the whole feed as soon as one of them is copyleft.
 fetch_source() {
 	# Default to the tag's own archive. GitHub generates one for EVERY tag, whether
 	# or not the author attached anything to the release -- so a package does not
@@ -82,10 +92,18 @@ fetch_source() {
 	# somewhere other than GitHub needs.
 	url="${SOURCE_URL:-https://github.com/${REPO}/archive/refs/tags/${TAG}.tar.gz}"
 
+	# Every package this entry publishes, so that each is served the source of the
+	# release it came out of. Set by the KIND branch that can know -- the manifest
+	# names them -- and the entry's own name otherwise, which is the one package the
+	# other shapes publish.
+	published="${PUBLISHED:-$NAME}"
+
 	mkdir -p "$DIST/sources"
-	# Named for the package and version, because that is the pair a user holding a
+	# Named for a package and a version, because that is the pair a user holding a
 	# binary has: `apk info` tells them both, and nothing else identifies which
-	# source goes with what they installed.
+	# source goes with what they installed. The download lands under the entry's own
+	# name; the loop at the end of this function gives the release's other packages
+	# the same pair.
 	case "$url" in
 	*.tar.gz|*.tgz) ext="tar.gz" ;;
 	*.tar.xz)       ext="tar.xz" ;;
@@ -124,14 +142,50 @@ fetch_source() {
 			echo "   set SOURCE_URL in packages/$NAME/upstream.sh if the source lives elsewhere;" >&2
 			echo "   if this package is copyleft the publish will refuse it later, by name" >&2
 			rm -f "$dest"
+			# Which packages are now without source, which entry publishes them,
+			# and what was tried. The refusal happens in tools/sources.sh, in a
+			# later job that knows package names and nothing about entries -- so
+			# without this it can only guess an upstream.sh path, and for a package
+			# published by an entry of another name that guess is a directory that
+			# does not exist.
+			for pkg in $published; do
+				printf '%s %s %s %s\n' "$pkg" "$VERSION" "$NAME" "$url" \
+					>> "$DIST/sources/unstaged.txt"
+			done
 			return 0
 		fi
 	fi
 
 	sum="$(sha256sum "$dest" | cut -d' ' -f1)"
-	printf '%s %s %s %s %s\n' "$NAME" "$VERSION" "$(basename "$dest")" "$sum" "$url" \
-		>> "$DIST/sources/staged.txt"
-	echo ">> $NAME: staged corresponding source $(basename "$dest")"
+	# One archive, one copy and one row per package it is the source for. Copied
+	# rather than hard-linked on purpose: the link would not survive either step
+	# that carries this file onward -- tools/sources.sh copies dist/sources file by
+	# file into the published tree, and the artifact between the fetch job and the
+	# signing job is a zip, which has no notion of one file under two names -- so a
+	# link buys nothing here and only fails on a filesystem that has none. The
+	# recorded sha256 is the same for every row because the bytes are.
+	#
+	# package version file sha256 url entry -- tools/sources.sh reads the first five
+	# to publish a row per package in sources/index.txt, and the sixth to name the
+	# entry when it has to report one.
+	wanted=""
+	for pkg in $published; do
+		[ "$pkg" != "$NAME" ] || wanted=yes
+		file="${pkg}-${VERSION}.${ext}"
+		[ "$file" = "$(basename "$dest")" ] || cp "$dest" "$DIST/sources/$file"
+		printf '%s %s %s %s %s %s\n' \
+			"$pkg" "$VERSION" "$file" "$sum" "$url" "$NAME" \
+			>> "$DIST/sources/staged.txt"
+		echo ">> $NAME: staged corresponding source $file"
+	done
+
+	# The download landed under the entry's name, and an entry that publishes no
+	# package of that name has just left an archive in the tree that no row of
+	# sources/index.txt refers to. Every entry here is named after one of its own
+	# packages today, so this drops nothing -- it is what keeps the first one that is
+	# not from publishing a file whose only meaning is a directory name in this
+	# repository.
+	[ -n "$wanted" ] || rm -f "$dest"
 }
 
 # check_signature <file>
@@ -172,6 +226,11 @@ check_signature() {
 	# with a detached usign signature.
 	rm -f "$1.sig"
 }
+
+# The package names this entry publishes, for fetch_source. Empty here so that a
+# variable of this name in the environment cannot decide it; the branch below sets it
+# where it knows more than the entry's own directory name.
+PUBLISHED=""
 
 case "${KIND:?upstream.sh must set KIND}" in
 apk)
@@ -252,6 +311,25 @@ manifest)
 		echo "$NAME: manifest names no packages" >&2
 		exit 1
 	}
+
+	# The names this release publishes, out of the manifest that was just verified --
+	# the same names the index will carry and `apk info` will print. fetch_source
+	# needs them: one tag's archive is the corresponding source for every package
+	# built from that tag, and tools/sources.sh refuses to publish a copyleft package
+	# it cannot find source for BY PACKAGE NAME.
+	#
+	# Only lines whose own asset is named for the package are read, and that filter is
+	# not defensive tidiness. `owfeed release` derives this field from the asset
+	# filename and gets it wrong where the architecture itself contains an underscore:
+	# VizzleTF/podkop_autoupdater v0.3.6 has `pkg podkop-updater_0.3.6-r1_mips ipk
+	# podkop-updater_0.3.6-r1_mips_24kc.ipk`, a name no index carries and no router
+	# ever asks for. Serving a source archive under it would put a file in
+	# https://repo.owfeed.org/sources/ that nothing in sources/index.txt refers to.
+	# An asset is named <package>-<version> (apk) or <package>_<version> (ipk), so a
+	# name that does not begin its own filename is not a package name.
+	PUBLISHED="$(awk -v v="$VERSION" \
+		'$1=="pkg" && (index($4, $2 "-" v) == 1 || index($4, $2 "_" v) == 1) {print $2}' \
+		"$work/manifest.txt" | sort -u)"
 
 	# pkg <name> <format> <file> <size> <sha256> <arch>
 	awk '$1=="pkg"{print $3, $4, $5, $6, $7}' "$work/manifest.txt" | while read -r fmt file size sum arch; do
