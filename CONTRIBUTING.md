@@ -314,7 +314,7 @@ By hand: edit `VERSION` and the checksums in `upstream.sh`. Nothing else changes
 
 ## I want it to update itself
 
-`AUTO_MERGE="yes"` asks GitHub to merge an update once the checks pass.
+`AUTO_MERGE="yes"` lets an update reach `main` once the checks pass, with nobody in the loop.
 
 It is offered **only where the upstream publishes a detached signature** beside its artifact, and
 that signature is verified against a key pinned in `keys/`. That is provenance from someone other
@@ -324,11 +324,17 @@ it was not replaced.
 
 The checks are never skipped either way.
 
-**It does not merge unattended today.** The hourly job opens its pull requests as
-`app/github-actions`, and this repository holds that account's checks until a maintainer approves
-them, so an armed auto-merge waits for that approval — [issue
-#53](https://github.com/owfeed/owfeed-packages/issues/53). What `AUTO_MERGE="yes"` buys right now is
-one click instead of a review of the diff.
+**How it lands, since there is no pull request.** The hourly job pushes
+`update/<name>-<version>` and starts the checks on it. The next run pushes that commit onto `main`,
+but only when `check / build` and `check / check` are green on it and the diff touches nothing but
+one `packages/<name>/upstream.sh`; `main`'s branch protection refuses the push otherwise. So an
+update is typically live within two hours, through the same required checks a merge would have had
+to satisfy. There is no pull request because a pull request a bot opens cannot merge itself here —
+GitHub creates its `pull_request` run in an approval-required state — which is what
+[issue #53](https://github.com/owfeed/owfeed-packages/issues/53) was.
+
+An update that is **not** eligible is pushed the same way and then gets a pull request, and that one
+waits for a maintainer.
 
 ---
 
@@ -437,11 +443,11 @@ Then check three separate things, of which only the first is usually checked:
 [LEGAL.md](LEGAL.md) works through what this feed already carries, including the two cases where
 the answer is not simply yes.
 
-## What auto-merge will not do
+## What an automatic update will not do
 
-`AUTO_MERGE="yes"` asks GitHub to merge once the checks pass. It never skips them, and it is refused
-outright in the cases below, because a signature answers *did the author publish this* and not
-*should this go out unread* — an upstream whose release key is stolen signs perfectly.
+`AUTO_MERGE="yes"` lets an update land on `main` once the checks pass. It never skips them, and it
+is refused outright in the cases below, because a signature answers *did the author publish this*
+and not *should this go out unread* — an upstream whose release key is stolen signs perfectly.
 
 **What your shape earns.** How far an update gets on its own follows from what the signature
 covers, not from how much work went into publishing it.
@@ -469,13 +475,15 @@ Refused in every shape:
   a run of them: a stolen key can publish a chain of versions faster than anyone reads the
   notifications, and every one of them verifies. The third waits for a person.
 
-A pull request that adds or changes anything under `keys/` is never merged automatically, whatever
-its `AUTO_MERGE` says. Auto-merge is only ever armed on a pull request the hourly job opened, and
-that job writes one `packages/<name>/upstream.sh` and nothing else. `.github/CODEOWNERS` names
-`keys/`, so a review is requested there — no branch rule requires it yet, for the reason in
+**Nothing under `keys/`, `tools/` or `.github/` ever lands this way**, whatever an `AUTO_MERGE`
+says. Two independent gates hold that: the hourly job commits nothing but the pins inside one
+`upstream.sh`, and `tools/land-updates.sh` compares the branch against `main` before pushing and
+refuses on any path but `packages/<name>/upstream.sh`. `.github/CODEOWNERS` names `keys/` as well,
+so a review is requested there — no branch rule requires it yet, for the reason in
 [`keys/README.md`](keys/README.md).
 
-Both still open the pull request. They decline to merge it.
+A refused update is still pushed and still checked. What it does not get is a landing without a
+person: it arrives as a pull request instead.
 
 ## Why a pin, and why a key
 

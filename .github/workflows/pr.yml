@@ -13,25 +13,33 @@ name: Check
 # job is for: publish.yml calls the same file without `dry-run`, with the signing
 # keys reached through `environment: feed`.
 
-# `workflow_dispatch` is load-bearing, not a convenience for re-running by hand.
-# The hourly update job opens its pull requests with `gh pr create` under
-# GITHUB_TOKEN, and GitHub holds the resulting run unconditionally: "when a workflow
-# using `GITHUB_TOKEN` creates or updates a pull request, the resulting
-# `pull_request` event creates workflow runs in an approval-required state". Not this
-# repository's `fork-pr-contributor-approval` policy -- that is
-# `first_time_contributors`, and the hold does not depend on the bot's history.
-# Measured on #45 -- attempt 1 created 2026-09-02 and never ran,
-# attempt 2 started two days later once a human triggered it. With required checks
-# on `main` that pull request is BLOCKED for as long as nobody looks.
+# `workflow_dispatch` is load-bearing, not a convenience for re-running by hand. It
+# is how EVERY update branch gets checked, and for a trusted one it is the only run
+# the commit will ever have.
 #
-# GitHub's own exception is the way out and needs no credential: "`workflow_dispatch`
-# and `repository_dispatch` events always create workflow runs". `check-updates.sh`
-# dispatches this workflow on the update branch after opening the pull request, and
-# because check runs bind to a commit rather than to an event -- and the head of
-# `update/...` IS the pull request's head commit -- the same `check / build` and
-# `check / check` contexts are reported, which is what the branch protection asks
-# for. It does not unblock the merge: auto-merge waits for the held `pull_request`
-# run, so a person still has to approve that one. Measured on #51; issue #53.
+# GitHub holds the `pull_request` run of a pull request a bot opened: "when a
+# workflow using `GITHUB_TOKEN` creates or updates a pull request, the resulting
+# `pull_request` event creates workflow runs in an approval-required state". Not this
+# repository's `fork-pr-contributor-approval` policy -- relaxed to
+# `first_time_contributors_new_to_github` at repository and organisation level at
+# once, the bot's #60 still came back `attempt 1 = action_required` (run
+# 33966648498), and both policies were put back. Measured on #45 as well: attempt 1
+# created 2026-09-02 and never ran, attempt 2 started two days later once a human
+# triggered it. With required checks on `main` such a pull request is BLOCKED for as
+# long as nobody looks -- issue #53.
+#
+# So `check-updates.sh` opens no pull request for an update whose author signature it
+# already trusts. It pushes `update/<package>-<version>` and dispatches this
+# workflow on it; `tools/land-updates.sh` fast-forwards `main` onto that commit on a
+# later hourly run once these checks are green, and `main`'s branch protection
+# refuses the push with GH006 if they are not. An untrusted update still gets a pull
+# request, and this dispatch is what makes its checks report at all.
+#
+# GitHub's own exception is why a dispatch works where the other events do not:
+# "`workflow_dispatch` and `repository_dispatch` events always create workflow runs".
+# Check runs bind to a commit rather than to an event, so a run dispatched on the
+# branch reports `check / build` and `check / check` against the very commit the push
+# is evaluated against -- which is what the branch protection reads.
 #
 # Nothing about that path reaches a key. `dry-run: true` below is a constant, and
 # `feed.yml`'s publish job is gated on `if: !inputs.dry-run` -- not on the event and

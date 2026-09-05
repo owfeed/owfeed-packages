@@ -150,10 +150,10 @@ Install it because you trust who publishes it, not because a page told you to.
 
 ## Staying current
 
-An hourly job asks each upstream for its latest release. When one appears it opens a pull request
+An hourly job asks each upstream for its latest release. When one appears it pushes a branch
 containing a version and its checksums, recomputed from the bytes the release actually served — and
 nothing else. CI then builds the feed, indexes it, checks it and installs it on a real OpenWrt image
-before it can be merged.
+before that branch can reach `main`.
 
 It proposes; it does not publish. A job that fetched whatever an upstream pushed in the last hour
 and signed it with this feed's key would be handing that key's authority to every upstream, and
@@ -161,14 +161,16 @@ would make the checksum pins decoration: recomputed from whatever arrived, they 
 nothing.
 
 Where an upstream publishes a detached signature beside its artifact, that is provenance from
-someone other than this feed, and the package may set `AUTO_MERGE="yes"`, which asks GitHub to merge
-the pull request once its checks pass.
+someone other than this feed, and the package may set `AUTO_MERGE="yes"`. Those updates need no
+person: the next hourly run fast-forwards `main` onto the branch once `check / build` and
+`check / check` are green on that exact commit, and `main`'s branch protection refuses the push when
+they are not. The checks are never skipped.
 
-**An update still waits for a person today.** The pull request is opened by `app/github-actions`,
-and this repository holds that account's checks for approval, so nothing merges — and nothing is
-published — until a maintainer approves the run. That is
-[issue #53](https://github.com/owfeed/owfeed-packages/issues/53). The checks are never skipped
-either way.
+**A new package still needs a person, and so does anything unusual.** An unsigned release, a major
+version bump, a third update to the same package in a day — each of those gets a pull request and
+waits for a maintainer instead. So does every diff that touches more than one
+`packages/<name>/upstream.sh`: a package this feed has never carried arrives with a key it has never
+pinned, which is a change under `keys/`, and nothing lands there unattended.
 
 ## Whose packages these are
 
