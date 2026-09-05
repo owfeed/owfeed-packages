@@ -159,7 +159,14 @@ land() {
 	# and this is where that stays true.
 	files="$(git diff --name-only "refs/remotes/origin/main..$sha")"
 	if [ -z "$files" ]; then
-		echo "$branch: no change against main; nothing to land"
+		# Already in `main`, byte for byte: the branch is spent, not pending.
+		# Deleting it is the whole point -- left alone it comes back every hour,
+		# reads "nothing to land" forever, and buries the branches that do need
+		# looking at. Measured: `0.1.3` landed and was immediately rebuilt on a
+		# stale head by the same run, leaving exactly such a branch behind.
+		echo "$branch: already in main; deleting the spent branch"
+		git push -q origin ":refs/heads/$branch" ||
+			echo "  branch not deleted; harmless, the next run tries again"
 		return 0
 	fi
 	stray="$(printf '%s\n' "$files" | grep -v "$ALLOWED" || true)"

@@ -103,6 +103,18 @@ jobs:
         run: |
           git config user.name  "owfeed-bot"
           git config user.email "owfeed-bot@users.noreply.github.com"
+
+          # Re-read `main` before looking, because the `land` job above may have
+          # moved it during THIS run. `actions/checkout` fetches `github.sha`, the
+          # head recorded when the run was created -- so without this the search
+          # compares upstream against a pin that is already superseded, decides the
+          # release is new, and pushes a branch identical to `main`. Measured: after
+          # `0.1.3` landed, the same run rebuilt `update/luci-app-footstrap-files-0.1.3`
+          # on the stale head, and the branch survived with an empty diff because the
+          # deduplication could not see the branch `land` had just deleted.
+          git fetch -q origin main
+          git reset -q --hard origin/main
+
           ./tools/check-updates.sh
 
   # An update that lands by itself leaves the feed unpublished, and nothing says so.
