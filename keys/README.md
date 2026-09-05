@@ -54,11 +54,11 @@ another. `owfeed` checks the `repo` line in the manifest as well, and that close
 own — which is why the shared key is tolerable rather than urgent. What separate keys would add is
 blast radius: a compromise of one would reach nothing else.
 
-Adding or changing a key is the diff `.github/CODEOWNERS` names. Auto-merge cannot reach it by
-construction rather than by a check: it is only ever requested on a pull request the hourly job
-itself opened, and that job writes one file — `packages/<name>/upstream.sh` — refusing even that
-when the diff moves anything but the version and its checksums. A key arrives in a pull request a
-person opened, and those are never auto-merged.
+Adding or changing a key is the diff `.github/CODEOWNERS` names. The automation cannot reach it:
+the hourly job writes one file — `packages/<name>/upstream.sh` — and refuses even that when the diff
+moves anything but the version and its checksums, and `tools/land-updates.sh`, which is what pushes
+an update onto `main`, refuses any branch whose diff names another path. A key arrives in a pull
+request a person opened, and nothing pushes those.
 
 The code-owner review is not enforced by a branch rule. That needs a reviewer who is not the
 author, and with a single maintainer it would block every key addition permanently rather than

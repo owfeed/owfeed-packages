@@ -11,8 +11,10 @@ Operating the feed. For adding or updating a package, see [CONTRIBUTING.md](CONT
 | pull request | fetch → build → sign → index → check-tree → check-origin → sources → doctor → smoke (both lines) | throwaway ones |
 | push to `main` | job 1: fetch → build | **no** |
 | | job 2: sign → index → check-tree → check-origin → sources → smoke → verify → publish → Pages | **yes**, behind `environment: feed` |
-| hourly | ask each upstream for its latest release; open a pull request if there is one | no |
-| | dispatch `Check` on the update branch, because the pull request's own run waits for approval | throwaway ones |
+| hourly | push `main` onto any `update/*` branch whose required checks are already green | no |
+| | ask each upstream for its latest release; push an update branch if there is one | no |
+| | dispatch `Check` on that branch — GitHub starts no run for it by itself | throwaway ones |
+| | open a pull request for it, unless the update is one that may land unattended | no |
 | | dispatch `Publish` when the head of `main` has no `Publish` run of its own | no |
 
 The split on `main` is the point: the fetch scripts execute values contributed by pull requests, and
@@ -22,28 +24,41 @@ The pull-request row is not a second pipeline that resembles the first. Both wor
 reusable `feed.yml` at the same pinned tag: `pr.yml` with `dry-run: true`, `publish.yml` with
 `secrets: inherit` and no dry-run. The difference is throwaway keys, no environment and no deploy.
 
-**Why the hourly job dispatches two workflows.** Everything it does happens under `GITHUB_TOKEN`, and
-neither event that would normally start a run does. A pull request opened by `app/github-actions`
-gets a `pull_request` run that is created and then held in `action_required` until a person approves
-it. That hold is unconditional for this token — "when a workflow using `GITHUB_TOKEN` creates or
-updates a pull request, the resulting `pull_request` event creates workflow runs in an
-approval-required state" — and not a consequence of this repository's
-`fork-pr-contributor-approval` policy. #45 measured the wait at two days. With required checks on
-`main` the pull request sits blocked and the automatic update is not automatic. A merge made with the same token raises no `push` event at
-all. `workflow_dispatch` is the documented exception in both cases: those events always create runs.
+**Why a trusted update gets no pull request.** Everything the hourly job does happens under
+`GITHUB_TOKEN`, and neither event that would normally start a run does. A pull request opened by
+`app/github-actions` gets a `pull_request` run that is created and then held in `action_required`
+until a person approves it — "when a workflow using `GITHUB_TOKEN` creates or updates a pull
+request, the resulting `pull_request` event creates workflow runs in an approval-required state".
+That hold is unconditional for this token. It is **not** this repository's
+`fork-pr-contributor-approval` policy: relaxed to `first_time_contributors_new_to_github` at
+repository and organisation level at once, the bot's #60 still came back with `attempt 1 =
+action_required` (run 33966648498), and both policies were put back. The hold reached this
+organisation between 2026-08-30 20:43Z and 2026-09-01 10:08Z, measured on `attempts/1` of the runs
+on the `update/*` branches either side of that window; #45 measured the resulting wait at two days.
+With required checks on `main`, such a pull request can never merge itself.
 
-The dispatch of `Check` runs on the head of the update branch, which is the pull request's head
-commit, and check runs bind to a commit rather than to an event — so it reports the same `check /
-build` and `check / check` contexts the branch protection is waiting for. It publishes nothing:
-`pr.yml` passes `dry-run: true`, and `feed.yml`'s publish job is gated on that input and not on the
-event or the ref, so no dispatch can reach the `feed` environment.
+So an update the rules let through gets no pull request. `check-updates.sh` pushes
+`update/<name>-<version>` and dispatches `Check` on it; a later run of `land-updates.sh`
+fast-forwards `main` onto that commit. **The checks are not skipped by that** — branch protection is
+enforced on `main`, not on a pull request, and GitHub documents the path: "After all required status
+checks pass, any commits must either be pushed to another branch and then merged or pushed directly
+to the protected branch." A push whose required contexts are not green is refused with `GH006`.
 
-**The dispatch does not make an update merge on its own.** A green dispatched run is not what
-auto-merge waits for: the held `pull_request` run stays on the pull request, and the merge happens
-only after somebody presses *Approve and run* on it. Measured on #51, where the dispatched run was
-green and the pull request stayed open until a person approved the held one — that is
-[issue #53](https://github.com/owfeed/owfeed-packages/issues/53), and it is open. Every update
-therefore needs one click from a maintainer before anything merges or publishes.
+The dispatch of `Check` runs on the head of the update branch, and check runs bind to a commit
+rather than to an event — so it reports the same `check / build` and `check / check` contexts the
+branch protection reads when that commit is pushed. It publishes nothing: `pr.yml` passes
+`dry-run: true`, and `feed.yml`'s publish job is gated on that input and not on the event or the
+ref, so no dispatch can reach the `feed` environment.
+
+**What still needs a person.** An update that is not eligible — no upstream signature, a `binaries`
+package, a major version bump, a third update to one package in a day — is pushed the same way and
+then gets a pull request, which a maintainer merges. And nothing lands automatically outside
+`packages/<name>/upstream.sh`: `land-updates.sh` diffs the branch against `main` and refuses on any
+other path, so a new package, which brings a key under `keys/`, is a pull request by construction.
+
+A merge or a push made with `GITHUB_TOKEN` raises no `push` event either, which is why `Publish` is
+dispatched rather than triggered. `workflow_dispatch` is the documented exception in both cases:
+those events always create runs.
 
 **How owfeed gets here.** `owfeed/owfeed/setup@v0.5.0`, pinned to a release. The action downloads
 one binary and checks it against the build attestation from owfeed's own release workflow before
@@ -95,9 +110,9 @@ such asset, or `ARTIFACT_IPK` is unset in `upstream.sh` for a package that used 
 publish one. Absent from *some* means the build ran short — read the build log for a
 step that failed without stopping the run.
 
-## A pull request is red
+## A check is red
 
-Read the finding. Each says what it costs and what to do. The ones with non-obvious causes:
+On a pull request or on an `update/*` branch — the same workflow reports both. Read the finding. Each says what it costs and what to do. The ones with non-obvious causes:
 
 **`OWF207` — configuration shipped but not declared.** The package installs `/etc/config/foo` and
 `conffiles:` does not list it. sysupgrade reads `.conffiles_static` to decide what survives a
@@ -119,14 +134,22 @@ somewhere a user can go.
 
 ---
 
-## An update pull request appeared and I do not recognise the version
+## An update appeared and I do not recognise the version
 
-The bot opens one for any upstream release. Look at the diff: it must be a version and its
-checksums, nothing else. If it touches anything more, something is wrong with the bot rather than
-with the release.
+Look at the diff, whether it arrived as a pull request or as a commit on `main`: it must be a
+version and its checksums, nothing else. If it touches anything more, something is wrong with the
+bot rather than with the release — and `tools/land-updates.sh` would have refused to push it, so on
+`main` that shape means a person put it there.
 
-To hold an update, close the pull request; the bot will not reopen the same one. To stop a package
-updating itself, set `AUTO_MERGE="no"` in its `upstream.sh`.
+To stop a package updating itself, set `AUTO_MERGE="no"` in its `upstream.sh`. That is the only
+reliable way to hold one: a trusted update lands within about two hours of upstream publishing it,
+so there is no window to close a pull request in. For an update that did get a pull request, closing
+it holds the update — the bot does not reopen it and does not rebuild the branch.
+
+**An `update/*` branch that never lands** is a red check, and reading the run is the fix. Two other
+shapes appear in the hourly job's log: `not green yet` naming a context that is `cancelled` — delete
+the branch, and the next hourly run rebuilds it with a clean set of runs — and `REFUSED`, which
+means the branch touches a path an update may not, and that one needs a person.
 
 ---
 
@@ -210,18 +233,22 @@ they published somewhere else, anything that is not the release you are about to
 ## Things that are not automatic, on purpose
 
 **Publishing is not.** The hourly job proposes; it never signs. What it may do is dispatch
-`Publish` for a commit already on `main` — a merge made with `GITHUB_TOKEN` raises no push event,
-so without that the feed would keep serving the previous version. The key is never in that job; it
-is in the run it starts. A job that fetched whatever an upstream pushed in the last hour and signed
-it would hand this feed's key to every upstream at once.
+`Publish` for a commit already on `main` — a push made with `GITHUB_TOKEN` raises no push event, so
+without that the feed would keep serving the previous version. The key is never in that job; it is
+in the run it starts. A job that fetched whatever an upstream pushed in the last hour and signed it
+would hand this feed's key to every upstream at once.
 
-**Merging is not, unless the author signed — and not more than twice a day.** `AUTO_MERGE="yes"` is
-offered only where a detached signature is verified against a pinned key, only for shapes whose
-signature covers what changed (`manifest` always, `apk` while the container set holds, `binaries`
-never), and never for a third update to the same package inside 24 hours. Even where it is armed, no
-update merges unattended today: the pull request's own `pull_request` run is held for approval and
-auto-merge waits for it (issue #53). A stolen key publishes a
-chain of releases faster than anyone reads the notifications, and every one of them verifies.
+**Landing on `main` is not, unless the author signed — and not more than twice a day.**
+`AUTO_MERGE="yes"` is offered only where a detached signature is verified against a pinned key, only
+for shapes whose signature covers what changed (`manifest` always, `apk` while the container set
+holds, `binaries` never), and never for a third update to the same package inside 24 hours. A stolen
+key publishes a chain of releases faster than anyone reads the notifications, and every one of them
+verifies. Everything outside that set is a pull request and a maintainer.
+
+**Landing anything but a version bump is not.** `land-updates.sh` refuses to push a branch whose
+diff against `main` names any path but `packages/<name>/upstream.sh`, so `keys/`, `tools/` and
+`.github/` are unreachable from the automation — which is the invariant `ECOSYSTEM.md` states and
+`.github/CODEOWNERS` asks a reviewer for.
 
 **Architecture coverage is not.** `owfeed.lock` records which architectures the feed publishes for,
 and `--frozen-lock` fails the build when upstream's list moves. Run `owfeed lock --update` and read

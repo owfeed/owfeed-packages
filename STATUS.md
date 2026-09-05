@@ -2,7 +2,7 @@
 
 *[ECOSYSTEM.md](https://github.com/owfeed/owfeed/blob/main/docs/ECOSYSTEM.md) in
 owfeed says where the boundaries between owlab, owfeed and this feed run and why.
-This file says how much of this feed's side of that exists, as of 2026-09-04.*
+This file says how much of this feed's side of that exists, as of 2026-09-05.*
 
 It lives here rather than in the shared document because a shared status file goes
 stale on exactly the facts none of its own CI touches. Beside the thing it
@@ -27,12 +27,26 @@ it is the last time the URL has to move.
 | Feed updates reaching a router | Upstream released 0.14.10 → the hourly bot opened #51 with the pins recomputed → a maintainer approved the held check → merge → `Publish` → the served 25.12 index carries `0.14.10-r1`, read from a router |
 | Publishing through owfeed's reusable workflow | `publish.yml` calls `feed.yml@v0.5.0` with `secrets: inherit`; a probe measured that a called job's `environment: feed` resolves against this repository, and the signing secrets reached it at their real length |
 | An author signature inside every package | `signing.author-keys: ./keys` in `owfeed.yml`, one EC public half pinned per package; an unsigned package is dropped from the index (OWF407) and `tools/check-tree.sh` then fails the publish, so a green publish is the evidence |
-| Auto-merge tier rules | Six scenarios exercised in a real git repository: manifest/minor merges, major bump holds, `binaries` holds, no `SIG_KEY` holds, a diff touching `SIG_KEY_ID` holds, the daily ceiling holds |
+| Automatic-update tier rules | Six scenarios exercised in a real git repository: manifest/minor merges, major bump holds, `binaries` holds, no `SIG_KEY` holds, a diff touching `SIG_KEY_ID` holds, the daily ceiling holds |
 | Verify before read | `tools/fetch.sh` checks the signature before parsing, and cross-checks `repo` and `tag` inside the manifest — the signature says *who*, never *what about* |
 | Ingest without a key | The build job runs contributed fetch scripts and never sees the signing key; the key appears only after the bytes are already in an artifact |
 | The feed on its own domain | `owfeed verify` passes six checks against `https://repo.owfeed.org`, and luci-theme-footstrap installs the published theme by name from it on a real router |
 
 ## Built but not yet exercised in anger
+
+- **An update that lands and publishes unattended.** A trusted update no longer opens
+  a pull request: `tools/check-updates.sh` pushes `update/<name>-<version>` and
+  dispatches `Check` on it, and `tools/land-updates.sh` fast-forwards `main` onto that
+  commit on a later hourly run, once `check / build` and `check / check` are green on
+  it. The checks survive the change because branch protection is enforced on `main` —
+  "After all required status checks pass, any commits must either be pushed to another
+  branch and then merged or pushed directly to the protected branch", and a push
+  without them is refused with `GH006`. Both scripts were exercised against a bare
+  repository with a stubbed `gh`: a signed minor update reaches `main` with no pull
+  request, a branch with a red or missing context is not pushed, a branch touching
+  `keys/` is refused by the path gate, a branch with an open pull request is left to
+  its reviewer, and a `main` that moved ahead sends the branch back to be rebuilt. What
+  has not happened yet is a real upstream release going through it end to end.
 
 - **The intake funnel** (`.github/ISSUE_TEMPLATE/package-request.yml` plus
   `.github/workflows/intake.yml`) answers correctly when run by hand against a
@@ -41,26 +55,30 @@ it is the last time the URL has to move.
 
 ## Not built, and why
 
-**An update that merges and publishes unattended.** `AUTO_MERGE="yes"` arms
-GitHub's auto-merge, and it still waits for a person. The hourly job opens its
-pull requests with `GITHUB_TOKEN`, and GitHub holds the resulting `pull_request`
-run in `action_required` unconditionally — "when a workflow using `GITHUB_TOKEN`
-creates or updates a pull request, the resulting `pull_request` event creates
-workflow runs in an approval-required state". It is not this repository's
-`fork-pr-contributor-approval` policy: that policy is `first_time_contributors`,
-and the hold does not depend on how many of the bot's pull requests have merged
-before. `check-updates.sh`
-dispatches `Check` on the update branch, which reports the contexts the branch
-protection requires, but auto-merge waits for the held run rather than for the
-dispatched one — measured on #51, where the dispatched run was green and the pull
-request stayed open until the held one was approved. Publishing after the merge is
-answered: `update.yml` dispatches `Publish` when the head of `main` has no
-`Publish` run, because a merge made with `GITHUB_TOKEN` raises no push event. Both
-halves are [issue #53](https://github.com/owfeed/owfeed-packages/issues/53), and
-GitHub names one fix for both: "use a GitHub App installation access token or a
-personal access token instead of `GITHUB_TOKEN` when creating or updating the pull
-request". Such a token also raises the push event, so `Publish` would need no
-dispatch either.
+**A pull request from this bot that can merge itself.** There is none, and the
+automation is built around that rather than against it. GitHub holds the
+`pull_request` run of a pull request opened with `GITHUB_TOKEN` in
+`action_required` unconditionally — "when a workflow using `GITHUB_TOKEN` creates
+or updates a pull request, the resulting `pull_request` event creates workflow runs
+in an approval-required state" — and the hold reached this organisation between
+2026-08-30 20:43Z and 2026-09-01 10:08Z, measured on `attempts/1` of the runs on
+the `update/*` branches either side of it. It is not this repository's
+`fork-pr-contributor-approval` policy: relaxed to
+`first_time_contributors_new_to_github` at repository and organisation level at
+once, the bot's #60 still came back `attempt 1 = action_required` (run
+33966648498), and both policies were put back. GitHub names one fix — "use a GitHub
+App installation access token or a personal access token instead of `GITHUB_TOKEN`
+when creating or updating the pull request" — and this feed declines it: an App or
+a personal token is a new credential to store and rotate, and it would also make
+every check run under an identity that can write here. Not opening the pull request
+costs nothing instead, because the checks were never enforced by the pull request.
+What still needs a maintainer is a pull request the bot cannot land on its own: an
+unsigned or `binaries` package, a major bump, the third update in a day, and
+anything touching a path outside `packages/<name>/upstream.sh`.
+[Issue #53](https://github.com/owfeed/owfeed-packages/issues/53) is what this
+answers. Publishing was the other half of it and is unchanged: `update.yml`
+dispatches `Publish` when the head of `main` has no `Publish` run, because a push
+made with `GITHUB_TOKEN` raises no push event.
 
 **A consumer job on top of the check.** `owfeed smoke` proves the channel installs
 without `--allow-untrusted`; nothing yet proves the package that came through it
@@ -75,9 +93,9 @@ decision about whose workflow owns it, not a missing capability.
 **CODEOWNERS as a mechanism.** `keys/` is named, and no branch rule enforces the
 review. With a single maintainer a required review blocks every key addition
 permanently instead of gating it, because the author of a pull request cannot
-approve their own. Auto-merge cannot reach `keys/` regardless — it is only ever
-requested on pull requests the update job itself opened, and that job writes one
-`upstream.sh`. The review becomes a mechanism on the day there is a second
+approve their own. The automation cannot reach `keys/` regardless — the update job
+writes one `upstream.sh`, and `tools/land-updates.sh` refuses to push a branch whose
+diff against `main` names any other path. The review becomes a mechanism on the day there is a second
 maintainer, and until then it is a convention.
 
 ## Known contradictions

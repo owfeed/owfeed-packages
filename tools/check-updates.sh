@@ -1,16 +1,53 @@
 #!/bin/sh
-# Notice new upstream releases and propose them as pull requests.
+# Notice new upstream releases and land them: straight onto `main` when the package
+# file says somebody other than this feed vouches for the bytes, as a pull request
+# when it does not.
 #
-# It proposes; it does not publish. This feed's key is a trust anchor for every
+# It never publishes and it never signs. This feed's key is a trust anchor for every
 # package name on every subscriber's router, so a job that fetched whatever an
 # upstream pushed in the last hour and signed it would hand that authority to every
 # upstream at once. The checksum pins would stop meaning anything too: recomputed
 # from whatever arrived, they would attest to nothing.
 #
-# What a pull request carries instead is evidence — a diff containing a version and
-# its checksums and nothing else, and a run that builds, indexes, checks and
-# installs the result on a real OpenWrt image before anyone merges it.
+# What carries the evidence is the branch, either way: a diff containing a version
+# and its checksums and nothing else, and a run that builds, indexes, checks and
+# installs the result on a real OpenWrt image before anything reaches `main`.
+#
+# WHY A TRUSTED UPDATE OPENS NO PULL REQUEST. Read this before "fixing" an approval
+# policy: the policies were measured, twice, and they are not the cause.
+#
+# GitHub holds the `pull_request` run of a pull request a bot opened -- "when a
+# workflow using `GITHUB_TOKEN` creates or updates a pull request, the resulting
+# `pull_request` event creates workflow runs in an approval-required state" -- and
+# it applies to a branch in this repository, not only to a fork. It reached this
+# organisation between 2026-08-30 20:43Z and 2026-09-01 10:08Z, measured on
+# `attempts/1` of the runs on the `update/*` branches either side of that window.
+# `fork-pr-contributor-approval` is not it: relaxed to
+# `first_time_contributors_new_to_github` at repository and organisation level at
+# the same time, the bot's #60 still came back `attempt 1 = action_required` (run
+# 33966648498). Both policies were put back.
+#
+# With required checks on `main`, a held run is a pull request that cannot merge
+# itself, so every automatic update waited for a person -- issue #53.
+#
+# No pull request, no `pull_request` event, nothing to hold. The checks do not go
+# away with it, because branch protection is enforced on `main` and not on the pull
+# request: GitHub documents the push path through it -- "After all required status
+# checks pass, any commits must either be pushed to another branch and then merged
+# or pushed directly to the protected branch" -- and a push whose contexts are not
+# green is rejected with GH006. So this script pushes the update branch and
+# dispatches the checks on it, and `tools/land-updates.sh` fast-forwards `main` onto
+# that commit on a later run, once `check / build` and `check / check` are green.
+#
+# What did NOT change is which updates may do that. `may_automerge()` below is the
+# same set of conditions it was when it armed GitHub's auto-merge.
 set -eu
+
+# Which repository this is, resolved once and named on every `gh` call below. `gh`
+# falls back to `git remote` to decide that, which is how the neighbouring job in
+# `update.yml` failed its first run -- and a call that has to guess is a call that
+# can guess a different repository than the one this checkout came from.
+SELF="${GITHUB_REPOSITORY:-$(gh repo view --json nameWithOwner -q .nameWithOwner)}"
 
 # may_automerge <upstream.sh> <current version> <latest version> <package name>
 #
@@ -125,9 +162,44 @@ for up in packages/*/upstream.sh; do
 		[ "$current" != "$latest" ] || { echo "$name: $current is current"; exit 0; }
 
 		branch="update/${name}-${latest}"
-		if gh pr list --head "$branch" --state open --json number -q '.[0].number' | grep -q .; then
-			echo "$name: a pull request for $latest is already open"
-			exit 0
+
+		# Has this update already been proposed? Ask the remote branch, not the
+		# pull request list. A trusted update no longer opens one, so
+		# `gh pr list --head` would answer "nothing here" every hour and this job
+		# would rebuild, force-push and re-dispatch the same update forever --
+		# an hourly runner bill and a branch whose checks never finish before they
+		# are replaced.
+		#
+		# Three conditions, and the third is what stops a branch wedging: it
+		# exists, it already records this version, and `main` is an ancestor of
+		# it. A branch built on a `main` that has since moved can never be
+		# fast-forwarded onto it, so calling that one done would leave the update
+		# stuck until somebody deleted the branch; rebuilding it is how this
+		# converges with nobody looking.
+		#
+		# The version is the identity here, not the checksums: the branch name
+		# carries it and the pins are derived from the release that tag names. An
+		# upstream that replaces a release in place is caught where the bytes are
+		# read -- `tools/fetch.sh` compares them against the pin -- rather than by
+		# downloading ninety assets every hour to compare them with themselves.
+		#
+		# A failing `git ls-remote` reads as "no branch" and costs a rebuild, not
+		# a wrong merge: the push below is `--force-with-lease` and refuses if the
+		# branch turns out to be there and moved.
+		remote_sha="$(git ls-remote --heads origin "$branch" | cut -f1)"
+		if [ -n "$remote_sha" ]; then
+			git fetch -q origin "+refs/heads/$branch:refs/remotes/origin/$branch"
+			have="$(git show "refs/remotes/origin/$branch:$up" 2>/dev/null || true)"
+			want="VERSION=\"${latest}-r1\""
+			case "$have" in
+			*"$want"*)
+				if git merge-base --is-ancestor HEAD "refs/remotes/origin/$branch"; then
+					echo "$name: $branch already carries $latest"
+					exit 0
+				fi
+				echo "$name: $branch carries $latest but predates main: rebuilding it"
+				;;
+			esac
 		fi
 		echo "$name: $current -> $latest"
 
@@ -200,104 +272,90 @@ for up in packages/*/upstream.sh; do
 			evidence="Upstream publishes no signature, so the checksums below are all there is. This needs a person."
 		fi
 
-		git checkout -q -b "$branch"
+		# `-B` rather than `-b`: reaching this line means the branch is being
+		# built or rebuilt, and in a clone that already ran this once -- someone
+		# running it by hand -- `-b` fails with "a branch named ... already
+		# exists" and takes the rest of the packages down with it.
+		git checkout -q -B "$branch"
 		git commit -q "$up" -m "$name: $current -> $latest
 
 $evidence
 
 Pins recomputed from the bytes the release served."
-		# --force-with-lease, because a run that pushed the branch and then failed before
-		# opening the pull request leaves it behind, and the next run's push is a
-		# non-fast-forward against it -- so one failure would wedge that package's updates
-		# until somebody deleted the branch by hand. The branch belongs to this job, its
-		# name carries the version, and its content is derived from the release, so
-		# replacing it loses nothing; the lease still refuses if someone else moved it.
+		# --force-with-lease, because reaching this line means the branch is either
+		# absent or stale -- the dedup above returned only for a branch that already
+		# carries this version AND still fast-forwards onto `main`. Both other cases
+		# need the branch replaced: a run that pushed it and then failed left it
+		# behind, and one built on a `main` that has moved can never land. A plain
+		# push is a non-fast-forward against either, which would wedge that package's
+		# updates until somebody deleted the branch by hand. The branch belongs to
+		# this job, its name carries the version and its content is derived from the
+		# release, so replacing it loses nothing; the lease still refuses if someone
+		# else moved it.
 		git push -q -u --force-with-lease origin "$branch"
 
-		url="$(gh pr create --title "$name: $current -> $latest" --body "Upstream released \`v$latest\`.
+		# The fork in the road, and the only difference between the two paths.
+		#
+		# A trusted update gets no pull request: the head of this file records the
+		# measurement that makes a bot's pull request unmergeable without a person.
+		# The branch is pushed, the checks are dispatched on it below, and
+		# `tools/land-updates.sh` fast-forwards `main` onto it on a later run once
+		# those checks are green -- through the same required contexts a merge
+		# would have had to satisfy.
+		#
+		# An untrusted update gets exactly what every update used to get: a pull
+		# request, a dispatched run, and a maintainer who reads the diff. Nothing
+		# about that path is relaxed here, and `may_automerge()` above decides
+		# which one this is.
+		if [ "$automerge" = "yes" ]; then
+			echo "$name: $branch pushed, no pull request; it lands on main once its checks are green"
+		else
+			# NOT ALLOWED TO FAIL THE RUN. The branch exists by this line and
+			# every package after this one still has to be checked. Reported
+			# rather than swallowed: an update whose pull request never opened
+			# is an update nobody is looking at.
+			if url="$(gh pr create -R "$SELF" --title "$name: $current -> $latest" --body "Upstream released \`v$latest\`.
 
 $evidence
 
 The diff is a version and its checksums, recomputed from the bytes the release served. CI builds the
 feed, indexes it, runs \`owfeed doctor\`, and installs the result on a real OpenWrt image before this
-can be merged.")"
-		echo "$name: $url"
+can be merged.")"; then
+				echo "$name: $url"
+			else
+				echo "$name: PULL REQUEST NOT OPENED -- $branch is pushed and nothing tracks it"
+				echo "  run 'gh pr create -R $SELF --head $branch', or delete the branch and let the next run rebuild it"
+			fi
+		fi
 
 		# Start the checks by hand, because GitHub will not start them by itself.
 		#
-		# `gh pr create` runs under GITHUB_TOKEN, and GitHub holds the resulting run
-		# unconditionally: "when a workflow using `GITHUB_TOKEN` creates or updates a
-		# pull request, the resulting `pull_request` event creates workflow runs in an
-		# approval-required state". It is NOT this repository's approval policy --
-		# `fork-pr-contributor-approval` is `first_time_contributors`, and the hold does
-		# not depend on how many of the bot's pull requests merged before: #39 started
-		# its own run and merged in five seconds, #43 was held three hours later.
+		# For a trusted update this dispatch is the ONLY run the commit ever gets:
+		# there is no pull request, so no `pull_request` event exists to hold or to
+		# approve. Check runs bind to a commit rather than to an event, so the
+		# contexts it reports -- `check / build`, `check / check` -- are the ones
+		# `main`'s branch protection reads when `tools/land-updates.sh` pushes that
+		# commit, and the ones that script reads before it tries.
 		#
-		# Measured on #45: attempt 1 was created 2026-09-02 and never ran; attempt 2 ran
-		# two days later, triggered by a human. With required checks on `main` the pull
-		# request is BLOCKED for that whole time, and the automatic update stops being
-		# automatic -- which is what issue #11 is about.
-		#
-		# The documented fix is a different author, not a different policy: "use a
-		# GitHub App installation access token or a personal access token instead of
-		# `GITHUB_TOKEN` when creating or updating the pull request". Until that exists
-		# here, the dispatch below is the workaround -- it makes the checks run and
-		# report, but it does not make auto-merge fire (issue #53).
+		# For an untrusted update it is what it always was: the pull request's own
+		# `pull_request` run is created in `action_required` (see the head of this
+		# file), and this is what makes the checks report anyway.
 		#
 		# `workflow_dispatch` is named in GitHub's own exception -- "`workflow_dispatch`
 		# and `repository_dispatch` events always create workflow runs" -- so the same
-		# token that could not start the `pull_request` run can start this one. Check
-		# runs bind to a commit, not to an event, and the head of `$branch` is the pull
-		# request's head commit, so the run reports the very contexts the branch
-		# protection is waiting for. It publishes nothing: `pr.yml` passes
-		# `dry-run: true`, which is what `feed.yml`'s publish job is gated on.
+		# token that could not start the `pull_request` run can start this one. It
+		# publishes nothing: `pr.yml` passes `dry-run: true`, which is what `feed.yml`'s
+		# publish job is gated on, so no dispatch reaches the `feed` environment.
 		#
-		# Before arming auto-merge below, deliberately: `--auto` refuses a pull request
-		# that has nothing left to wait for, and this is what gives it something.
-		#
-		# NOT ALLOWED TO FAIL THE RUN, for the same reason as auto-merge: the pull
-		# request exists by this line and every package after this one still has to be
-		# checked. Reported rather than swallowed -- a silent failure here leaves a
-		# pull request whose checks nobody will ever start.
-		if gh workflow run pr.yml --ref "$branch" >/dev/null 2>&1; then
+		# NOT ALLOWED TO FAIL THE RUN, for the same reason as above -- and it is the
+		# one failure that leaves a trusted update stopped rather than late: a branch
+		# with no checks has nothing for `land-updates.sh` to read, and it will sit
+		# there reporting "waiting" every hour until somebody dispatches the run.
+		if gh workflow run pr.yml -R "$SELF" --ref "$branch" >/dev/null 2>&1; then
 			echo "$name: checks dispatched on $branch"
 		else
-			echo "$name: CHECKS NOT DISPATCHED -- the pull request is open and its checks are not running"
-			echo "  run 'gh workflow run pr.yml --ref $branch', or approve the waiting run by hand"
-		fi
-
-		# Auto-merge is offered only where someone other than this feed vouches for the
-		# bytes. This asks GitHub to merge once the checks pass; it does not skip them.
-		#
-		# Even then it is refused twice over, because a signature answers "did the
-		# author publish this" and not "should it go out unread". An upstream whose
-		# release key is stolen signs perfectly.
-		#
-		# ARMING IT IS NOT ALLOWED TO FAIL THE RUN, and that is the whole point of the
-		# `||` below. The job's product is the pull request, and by this line it exists:
-		# the branch is pushed, the diff is a version and its checksums, the evidence is
-		# in the body. Auto-merge is a convenience on top. Under `set -e` a refusal from
-		# GitHub took the whole check down AFTER the work had succeeded -- the run went
-		# red, which reads as "no update was found" while an update was sitting open, and
-		# every package checked after this one was skipped.
-		#
-		# GitHub refuses for two ordinary reasons, neither of them a problem with the
-		# update: the repository does not have "Allow auto-merge" enabled, and a pull
-		# request that is ALREADY mergeable with nothing left to wait for cannot be armed
-		# -- there is nothing to wait for, so it must simply be merged. Both are reported
-		# here rather than swallowed, because a silent `|| true` would leave a pull
-		# request nobody knows is waiting.
-		if [ "$automerge" = "yes" ]; then
-			if gh pr merge --squash --auto --delete-branch "$url" >/dev/null 2>&1; then
-				# Armed, not unattended: auto-merge waits for the held
-				# `pull_request` run rather than for the dispatch above, so the
-				# merge happens once a person approves that run -- issue #53.
-				echo "$name: auto-merge armed; it merges once the held pull_request run is approved"
-			else
-				echo "$name: AUTO-MERGE NOT ARMED -- the pull request is open and needs merging by hand"
-				echo "  either the repository has no 'Allow auto-merge', or the pull request is"
-				echo "  already mergeable and GitHub has nothing to wait for"
-			fi
+			echo "$name: CHECKS NOT DISPATCHED -- $branch has no run and cannot land"
+			echo "  run 'gh workflow run pr.yml -R $SELF --ref $branch'"
 		fi
 		git checkout -q "$BASE"
 		git checkout -q "$up"
