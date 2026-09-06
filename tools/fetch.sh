@@ -3,7 +3,7 @@
 #
 # One implementation for every package. A package contributes data — a version, its
 # checksums, which architectures each artifact serves — and never a script, so the
-# hourly update job rewrites values rather than code, and adding a package does not
+# scheduled update job rewrites values rather than code, and adding a package does not
 # start with copying somebody else's shell.
 #
 # Usage: tools/fetch.sh packages/<name>

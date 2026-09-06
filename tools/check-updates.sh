@@ -27,17 +27,16 @@
 # the same time, the bot's #60 still came back `attempt 1 = action_required` (run
 # 33966648498). Both policies were put back.
 #
-# With required checks on `main`, a held run is a pull request that cannot merge
-# itself, so every automatic update waited for a person -- issue #53.
+# A held run is a pull request nothing has checked, so every automatic update waited
+# for a person -- issue #53.
 #
-# No pull request, no `pull_request` event, nothing to hold. The checks do not go
-# away with it, because branch protection is enforced on `main` and not on the pull
-# request: GitHub documents the push path through it -- "After all required status
-# checks pass, any commits must either be pushed to another branch and then merged
-# or pushed directly to the protected branch" -- and a push whose contexts are not
-# green is rejected with GH006. So this script pushes the update branch and
-# dispatches the checks on it, and `tools/land-updates.sh` fast-forwards `main` onto
-# that commit on a later run, once `check / build` and `check / check` are green.
+# No pull request, no `pull_request` event, nothing to hold. The checks do not go away
+# with it: `tools/land-updates.sh` carries them instead of branch protection, which
+# was tried on `main` and removed because GitHub refused the push with GH006 while
+# both contexts were green on the commit -- it counts them for the branch being pushed
+# to. So this script pushes the update branch and dispatches the checks on it, and
+# `tools/land-updates.sh` fast-forwards `main` onto that commit on a later run, once
+# every run of `check / build` and `check / check` on it is completed/success.
 #
 # What did NOT change is which updates may do that. `may_automerge()` below is the
 # same set of conditions it was when it armed GitHub's auto-merge.
@@ -165,9 +164,9 @@ for up in packages/*/upstream.sh; do
 
 		# Has this update already been proposed? Ask the remote branch, not the
 		# pull request list. A trusted update no longer opens one, so
-		# `gh pr list --head` would answer "nothing here" every hour and this job
+		# `gh pr list --head` would answer "nothing here" on every run and this job
 		# would rebuild, force-push and re-dispatch the same update forever --
-		# an hourly runner bill and a branch whose checks never finish before they
+		# a runner bill on every run and a branch whose checks never finish before they
 		# are replaced.
 		#
 		# Three conditions, and the third is what stops a branch wedging: it
@@ -181,7 +180,7 @@ for up in packages/*/upstream.sh; do
 		# carries it and the pins are derived from the release that tag names. An
 		# upstream that replaces a release in place is caught where the bytes are
 		# read -- `tools/fetch.sh` compares them against the pin -- rather than by
-		# downloading ninety assets every hour to compare them with themselves.
+		# downloading ninety assets on every run to compare them with themselves.
 		#
 		# A failing `git ls-remote` reads as "no branch" and costs a rebuild, not
 		# a wrong merge: the push below is `--force-with-lease` and refuses if the
@@ -208,7 +207,7 @@ for up in packages/*/upstream.sh; do
 
 		# Only what this shape needs to recompute its pins. A manifest package pins
 		# no checksums at all -- they are in the manifest, under the author's
-		# signature -- so downloading its ninety-odd assets every hour to look at
+		# signature -- so downloading its ninety-odd assets on every run to look at
 		# none of them would be pure waste.
 		pattern='*'
 		[ "$KIND" = "manifest" ] && pattern='manifest.txt'
@@ -334,8 +333,7 @@ can be merged.")"; then
 		# there is no pull request, so no `pull_request` event exists to hold or to
 		# approve. Check runs bind to a commit rather than to an event, so the
 		# contexts it reports -- `check / build`, `check / check` -- are the ones
-		# `main`'s branch protection reads when `tools/land-updates.sh` pushes that
-		# commit, and the ones that script reads before it tries.
+		# `tools/land-updates.sh` reads on that same commit before it pushes it.
 		#
 		# For an untrusted update it is what it always was: the pull request's own
 		# `pull_request` run is created in `action_required` (see the head of this
@@ -350,7 +348,7 @@ can be merged.")"; then
 		# NOT ALLOWED TO FAIL THE RUN, for the same reason as above -- and it is the
 		# one failure that leaves a trusted update stopped rather than late: a branch
 		# with no checks has nothing for `land-updates.sh` to read, and it will sit
-		# there reporting "waiting" every hour until somebody dispatches the run.
+		# there reporting "waiting" on every run until somebody dispatches the run.
 		if gh workflow run pr.yml -R "$SELF" --ref "$branch" >/dev/null 2>&1; then
 			echo "$name: checks dispatched on $branch"
 		else

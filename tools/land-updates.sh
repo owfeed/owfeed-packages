@@ -19,16 +19,16 @@
 # same time, the bot's #60 still came back `attempt 1 = action_required` (run
 # 33966648498). Both policies were put back.
 #
-# Removing the pull request removes the hold and keeps the checks. Branch protection
-# is enforced on `main` rather than on a pull request, and GitHub documents the push
-# path through it: "After all required status checks pass, any commits must either be
-# pushed to another branch and then merged or pushed directly to the protected
-# branch". A push whose required contexts are not green is refused with GH006, so
-# `main` is guarded by the same two contexts a merge would have had to satisfy --
-# with GitHub, not this script, as the last word.
+# Removing the pull request removes the hold, and THIS SCRIPT is what keeps the
+# checks. Required status checks on `main` were tried for that and removed again:
+# with both contexts green on the commit, the push was still refused with "GH006: 2
+# of 2 required status checks are expected", because GitHub counts contexts for the
+# branch being pushed to rather than for the branch they ran on. So the gate below is
+# the whole gate -- every run of both contexts completed/success, no run at all read
+# as a refusal, and a path check GitHub never offered.
 #
 # It waits for nothing. A branch whose checks are still running is left alone and
-# read again on the next hourly run, the same shape as `update.yml`'s publish job:
+# read again on a later run, the same shape as `update.yml`'s publish job:
 # idempotent, cheap, and correct whether it runs once or twenty times.
 set -eu
 
@@ -38,8 +38,8 @@ set -eu
 # guess is a call that can guess a different repository.
 SELF="${GITHUB_REPOSITORY:-$(gh repo view --json nameWithOwner -q .nameWithOwner)}"
 
-# The contexts `main`'s branch protection requires, spelled exactly as the check runs
-# report them: `pr.yml`'s job is `check` and it calls owfeed's reusable `feed.yml`,
+# The contexts this script requires before it pushes, spelled exactly as the check
+# runs report them: `pr.yml`'s job is `check` and it calls owfeed's reusable `feed.yml`,
 # whose jobs are `build` and `check`, so each name is "<caller job> / <called job>".
 # Rename a job in either file and this list has to move with it -- a name that never
 # matches reads as "no run" below, which stops everything landing rather than letting
@@ -50,8 +50,8 @@ check / check'
 # Paths an update is allowed to touch, and the reason this script exists at all as
 # something separate from a merge button.
 #
-# `owfeed-packages never auto-merges a diff touching keys/, tools/, .github/ or
-# owfeed.yml` (ECOSYSTEM.md, §Invariants). CODEOWNERS states the same rule as a
+# `owfeed-packages never lands a diff touching keys/, tools/, .github/ or
+# owfeed.yml without a person` (ECOSYSTEM.md, §Invariants). CODEOWNERS states the same rule as a
 # review requirement, but CODEOWNERS is not consulted by a push -- so with no pull
 # request in the path, THIS is what keeps it true. A new package arrives with a key
 # this feed has never pinned, which is a diff under `keys/`; an update to a package
@@ -94,7 +94,7 @@ version_older() {
 # branch for those files and keep it alive forever.
 #
 # Every uncertain answer is "keep": a wrong deletion loses work, a wrong keep costs
-# one line in an hourly log.
+# one line in a scheduled run's log.
 superseded() {
 	_sha="$1"
 
@@ -162,7 +162,7 @@ land() {
 	# deliberately: a branch with nothing to land does not need green contexts to
 	# be swept up, and asking in the other order strands the oldest branches
 	# forever. Measured -- `update/luci-theme-footstrap-0.11.7` and `-0.12.9` were
-	# reported "not green yet" on every hourly run for weeks, each proposing a
+	# reported "not green yet" on every scheduled run for weeks, each proposing a
 	# version this feed had passed long ago, because no run had ever been
 	# dispatched on them and the sweep sat behind that verdict.
 	if reason="$(superseded "$sha")" && [ -n "$reason" ]; then
@@ -183,7 +183,7 @@ land() {
 	# measured counting it -- on #49 a green dispatch and the cancelled run it
 	# superseded read as `check / build fail`. Being stricter here than the push
 	# is deliberate: the failure it produces is a branch that waits and says so,
-	# and the recovery is in RUNBOOK.md -- delete the branch, the next hourly run
+	# and the recovery is in RUNBOOK.md -- delete the branch, a later run
 	# rebuilds it and dispatches a clean set of runs.
 	#
 	# One awk per context, each told the name through `-v` as a plain string.
@@ -269,10 +269,11 @@ land() {
 		return 0
 	fi
 
-	# The push is the real gate, not this script. GitHub re-evaluates the required
-	# contexts and refuses with GH006 if they do not hold, and refuses a
-	# non-fast-forward whatever this checkout believed a moment ago. Both are
-	# ordinary outcomes of a race, so they are reported and the branch waits.
+	# GitHub still has the last word on the shape of the push: `main` refuses a
+	# non-fast-forward whatever this checkout believed a moment ago. It says
+	# nothing about the contexts -- no required status check is configured on
+	# `main`, for the reason at the head of this file -- so a race is the only
+	# thing left to lose here, and losing it means the branch waits.
 	if git push -q origin "$sha:refs/heads/main"; then
 		echo "$branch: landed on main ($sha)"
 		# Delete it, or the next run reads it again and reports "no change
@@ -281,7 +282,7 @@ land() {
 		git push -q origin ":refs/heads/$branch" ||
 			echo "  branch not deleted; harmless, the next run finds nothing to land on it"
 	else
-		echo "$branch: push refused (main moved, or GitHub still counts a context red); it waits for the next run"
+		echo "$branch: push refused (main moved under it); it waits for the next run"
 	fi
 }
 

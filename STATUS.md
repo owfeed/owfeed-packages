@@ -2,7 +2,7 @@
 
 *[ECOSYSTEM.md](https://github.com/owfeed/owfeed/blob/main/docs/ECOSYSTEM.md) in
 owfeed says where the boundaries between owlab, owfeed and this feed run and why.
-This file says how much of this feed's side of that exists, as of 2026-09-05.*
+This file says how much of this feed's side of that exists, as of 2026-09-06.*
 
 It lives here rather than in the shared document because a shared status file goes
 stale on exactly the facts none of its own CI touches. Beside the thing it
@@ -24,29 +24,16 @@ it is the last time the URL has to move.
 
 | | Evidence |
 |---|---|
-| Feed updates reaching a router | Upstream released 0.14.10 → the hourly bot opened #51 with the pins recomputed → a maintainer approved the held check → merge → `Publish` → the served 25.12 index carries `0.14.10-r1`, read from a router |
+| Feed updates reaching a router | Upstream released 0.14.10 → the update bot opened #51 with the pins recomputed → a maintainer approved the held check and merged it → `Publish` → the served 25.12 index carries `0.14.10-r1`, read from a router. That was the path before #61; the row below is the same journey without a person |
 | Publishing through owfeed's reusable workflow | `publish.yml` calls `feed.yml@v0.5.0` with `secrets: inherit`; a probe measured that a called job's `environment: feed` resolves against this repository, and the signing secrets reached it at their real length |
 | An author signature inside every package | `signing.author-keys: ./keys` in `owfeed.yml`, one EC public half pinned per package; an unsigned package is dropped from the index (OWF407) and `tools/check-tree.sh` then fails the publish, so a green publish is the evidence |
 | Automatic-update tier rules | Six scenarios exercised in a real git repository: manifest/minor merges, major bump holds, `binaries` holds, no `SIG_KEY` holds, a diff touching `SIG_KEY_ID` holds, the daily ceiling holds |
 | Verify before read | `tools/fetch.sh` checks the signature before parsing, and cross-checks `repo` and `tag` inside the manifest — the signature says *who*, never *what about* |
 | Ingest without a key | The build job runs contributed fetch scripts and never sees the signing key; the key appears only after the bytes are already in an artifact |
+| An update landing and publishing with nobody in the loop | `luci-app-footstrap-files 0.1.3`, `luci-theme-footstrap 0.14.11` and `luci-app-gitbackup 0.1.1` each went from an upstream release to `repo.owfeed.org` with no human action: branch pushed, `Check` dispatched, `tools/land-updates.sh` fast-forwarded `main`, `Publish` dispatched |
 | The feed on its own domain | `owfeed verify` passes six checks against `https://repo.owfeed.org`, and luci-theme-footstrap installs the published theme by name from it on a real router |
 
 ## Built but not yet exercised in anger
-
-- **An update that lands and publishes unattended.** A trusted update no longer opens
-  a pull request: `tools/check-updates.sh` pushes `update/<name>-<version>` and
-  dispatches `Check` on it, and `tools/land-updates.sh` fast-forwards `main` onto that
-  commit on a later hourly run, once `check / build` and `check / check` are green on
-  it. The checks survive the change because branch protection is enforced on `main` —
-  "After all required status checks pass, any commits must either be pushed to another
-  branch and then merged or pushed directly to the protected branch", and a push
-  without them is refused with `GH006`. Both scripts were exercised against a bare
-  repository with a stubbed `gh`: a signed minor update reaches `main` with no pull
-  request, a branch with a red or missing context is not pushed, a branch touching
-  `keys/` is refused by the path gate, a branch with an open pull request is left to
-  its reviewer, and a `main` that moved ahead sends the branch back to be rebuilt. What
-  has not happened yet is a real upstream release going through it end to end.
 
 - **The intake funnel** (`.github/ISSUE_TEMPLATE/package-request.yml` plus
   `.github/workflows/intake.yml`) answers correctly when run by hand against a
@@ -72,6 +59,13 @@ when creating or updating the pull request" — and this feed declines it: an Ap
 a personal token is a new credential to store and rotate, and it would also make
 every check run under an identity that can write here. Not opening the pull request
 costs nothing instead, because the checks were never enforced by the pull request.
+They are enforced by `tools/land-updates.sh`, which pushes only when every run of
+`check / build` and `check / check` on that commit is `completed/success` and the
+diff names nothing but `packages/<name>/upstream.sh`. Required status checks on
+`main` were tried for this and removed: with both contexts green on the commit, the
+push was still refused with `GH006: 2 of 2 required status checks are expected`,
+because GitHub counts contexts for the branch being pushed to rather than for the
+branch they ran on.
 What still needs a maintainer is a pull request the bot cannot land on its own: an
 unsigned or `binaries` package, a major bump, the third update in a day, and
 anything touching a path outside `packages/<name>/upstream.sh`.

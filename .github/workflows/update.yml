@@ -2,8 +2,10 @@ name: Check upstreams
 
 on:
   schedule:
-    # Hourly. The cost of checking is one API call per package; the cost of not
-    # checking is that a security fix upstream sits unnoticed.
+    # Hourly is what this asks for; GitHub thins scheduled runs and delivers one
+    # every few hours (two to five, measured 2026-09-04..06). Nothing below depends
+    # on the interval. The cost of checking is one API call per package; the cost of
+    # not checking is that a security fix upstream sits unnoticed.
     - cron: '17 * * * *'
   workflow_dispatch:
 
@@ -16,7 +18,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Land what last hour's run already proved, before looking for anything new.
+  # Land what an earlier run already proved, before looking for anything new.
   #
   # A trusted update no longer arrives as a pull request, because a pull request a
   # bot opens cannot merge itself here: GitHub creates its `pull_request` run in
@@ -30,23 +32,25 @@ jobs:
   # 33966648498). Both policies were put back. Issue #53.
   #
   # `tools/check-updates.sh` pushes the branch and dispatches its checks; this pushes
-  # the branch's commit onto `main` once they are green. `main`'s branch protection
-  # is what enforces them -- a push with a red required context is refused with
-  # GH006 -- so the checks a merge would have waited for are the checks this waits
-  # for, and `tools/land-updates.sh` refuses on paths before GitHub is even asked.
+  # the branch's commit onto `main` once they are green. `tools/land-updates.sh` is
+  # what enforces them: every run of `check / build` and `check / check` on the commit
+  # must be completed/success, no run at all counts as a refusal, and the diff may
+  # name nothing but `packages/<name>/upstream.sh`. Required status checks on `main`
+  # were tried and removed -- GitHub refused the push with GH006 with both contexts
+  # green on the commit, because it counts them for the branch being pushed to.
   #
   # A separate job rather than a step inside `check-updates.sh`, for three reasons:
   # it iterates over branches while that script iterates over packages; it needs
   # neither `pull-requests: write` nor `actions: write`, and a job is where that
   # narrowing is expressed; and it must run on an hour when no upstream released
-  # anything, which is most hours -- the branch it lands was pushed by an earlier
+  # anything, which is most runs -- the branch it lands was pushed by an earlier
   # run and its checks finished long after that run ended.
   #
-  # First, so a branch that went green in the last hour is on `main` before
+  # First, so a branch that went green since the last run is on `main` before
   # `check-updates.sh` compares anything against `main`, and before the publish job
   # below asks whether `main` has been published. `!cancelled()` rather than
   # `success()`: a failure here is a branch that did not land, and it must not stop
-  # the hourly check from finding new releases.
+  # the scheduled check from finding new releases.
   land:
     runs-on: ubuntu-latest
     permissions:
@@ -176,8 +180,8 @@ jobs:
                     --branch main --limit 20 --json headSha -q '.[].headSha')"
 
           # Any status, not just success: one publish attempt per commit. A failed
-          # publish is red and visible; re-dispatching it every hour would be an
-          # hourly red run that fails for the same reason each time.
+          # publish is red and visible; re-dispatching it on every run would be a
+          # recurring red run that fails for the same reason each time.
           if printf '%s\n' "$runs" | grep -qxF "$head"; then
             echo "main $head already has a Publish run"
             exit 0

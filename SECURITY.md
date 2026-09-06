@@ -105,7 +105,7 @@ so a fork never comes near the real ones. `.gitignore` covers `*.pem`, `*.key` a
 Adding or changing anything under `keys/` is read by a person, because pinning a key is the entire
 trust decision compressed into four lines. `.github/CODEOWNERS` requests that review; no branch rule
 requires it yet, and with a single maintainer one would block every key addition rather than gate
-it. No automatic update reaches `keys/`. The hourly job writes one
+it. No automatic update reaches `keys/`. The update job writes one
 `packages/<name>/upstream.sh` and nothing else, and `tools/land-updates.sh` re-checks that against
 `main` before it pushes: a branch touching any other path is refused there and needs a pull request
 and a person.

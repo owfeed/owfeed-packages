@@ -11,11 +11,15 @@ Operating the feed. For adding or updating a package, see [CONTRIBUTING.md](CONT
 | pull request | fetch → build → sign → index → check-tree → check-origin → sources → doctor → smoke (both lines) | throwaway ones |
 | push to `main` | job 1: fetch → build | **no** |
 | | job 2: sign → index → check-tree → check-origin → sources → smoke → verify → publish → Pages | **yes**, behind `environment: feed` |
-| hourly | push `main` onto any `update/*` branch whose required checks are already green | no |
+| scheduled run | push `main` onto any `update/*` branch whose checks are already green | no |
 | | ask each upstream for its latest release; push an update branch if there is one | no |
 | | dispatch `Check` on that branch — GitHub starts no run for it by itself | throwaway ones |
 | | open a pull request for it, unless the update is one that may land unattended | no |
 | | dispatch `Publish` when the head of `main` has no `Publish` run of its own | no |
+
+`update.yml` asks for `cron: '17 * * * *'`, and GitHub delivers less than that: the scheduled
+runs on 2026-09-04..06 arrived two to five hours apart. Nothing here depends on the interval —
+every step is idempotent and picks up whatever the run before it left.
 
 The split on `main` is the point: the fetch scripts execute values contributed by pull requests, and
 that job has no key. The key appears only after the built bytes are already in an artifact.
@@ -24,7 +28,7 @@ The pull-request row is not a second pipeline that resembles the first. Both wor
 reusable `feed.yml` at the same pinned tag: `pr.yml` with `dry-run: true`, `publish.yml` with
 `secrets: inherit` and no dry-run. The difference is throwaway keys, no environment and no deploy.
 
-**Why a trusted update gets no pull request.** Everything the hourly job does happens under
+**Why a trusted update gets no pull request.** Everything the scheduled job does happens under
 `GITHUB_TOKEN`, and neither event that would normally start a run does. A pull request opened by
 `app/github-actions` gets a `pull_request` run that is created and then held in `action_required`
 until a person approves it — "when a workflow using `GITHUB_TOKEN` creates or updates a pull
@@ -35,20 +39,25 @@ repository and organisation level at once, the bot's #60 still came back with `a
 action_required` (run 33966648498), and both policies were put back. The hold reached this
 organisation between 2026-08-30 20:43Z and 2026-09-01 10:08Z, measured on `attempts/1` of the runs
 on the `update/*` branches either side of that window; #45 measured the resulting wait at two days.
-With required checks on `main`, such a pull request can never merge itself.
+A held run is a pull request nothing has checked, so every automatic update waited for a person.
 
 So an update the rules let through gets no pull request. `check-updates.sh` pushes
 `update/<name>-<version>` and dispatches `Check` on it; a later run of `land-updates.sh`
-fast-forwards `main` onto that commit. **The checks are not skipped by that** — branch protection is
-enforced on `main`, not on a pull request, and GitHub documents the path: "After all required status
-checks pass, any commits must either be pushed to another branch and then merged or pushed directly
-to the protected branch." A push whose required contexts are not green is refused with `GH006`.
+fast-forwards `main` onto that commit.
+
+**`land-updates.sh` is the gate, not branch protection.** It pushes only when every run of
+`check / build` and `check / check` on that exact commit is `completed/success`; a context with no
+run at all counts as a refusal, and the diff may name nothing but `packages/<name>/upstream.sh`.
+Required status checks were configured on `main` for this and removed again: with both contexts
+green on the commit, the push was still refused with `GH006: 2 of 2 required status checks are
+expected`, because GitHub counts contexts for the branch being pushed to rather than for the branch
+they ran on.
 
 The dispatch of `Check` runs on the head of the update branch, and check runs bind to a commit
-rather than to an event — so it reports the same `check / build` and `check / check` contexts the
-branch protection reads when that commit is pushed. It publishes nothing: `pr.yml` passes
-`dry-run: true`, and `feed.yml`'s publish job is gated on that input and not on the event or the
-ref, so no dispatch can reach the `feed` environment.
+rather than to an event — so `land-updates.sh` reads those contexts on the very commit it is about
+to push. It publishes nothing: `pr.yml` passes `dry-run: true`, and `feed.yml`'s publish job is
+gated on that input and not on the event or the ref, so no dispatch can reach the `feed`
+environment.
 
 **What still needs a person.** An update that is not eligible — no upstream signature, a `binaries`
 package, a major version bump, a third update to one package in a day — is pushed the same way and
@@ -142,13 +151,13 @@ bot rather than with the release — and `tools/land-updates.sh` would have refu
 `main` that shape means a person put it there.
 
 To stop a package updating itself, set `AUTO_MERGE="no"` in its `upstream.sh`. That is the only
-reliable way to hold one: a trusted update lands within about two hours of upstream publishing it,
-so there is no window to close a pull request in. For an update that did get a pull request, closing
+reliable way to hold one: a trusted update lands on the first scheduled run after its checks go
+green, and it has no pull request to close. For an update that did get a pull request, closing
 it holds the update — the bot does not reopen it and does not rebuild the branch.
 
 **An `update/*` branch that never lands** is a red check, and reading the run is the fix. Two other
-shapes appear in the hourly job's log: `not green yet` naming a context that is `cancelled` — delete
-the branch, and the next hourly run rebuilds it with a clean set of runs — and `REFUSED`, which
+shapes appear in the scheduled job's log: `not green yet` naming a context that is `cancelled` —
+delete the branch, and the next run rebuilds it with a clean set of runs — and `REFUSED`, which
 means the branch touches a path an update may not, and that one needs a person.
 
 ---
@@ -232,11 +241,11 @@ they published somewhere else, anything that is not the release you are about to
 
 ## Things that are not automatic, on purpose
 
-**Publishing is not.** The hourly job proposes; it never signs. What it may do is dispatch
+**Publishing is not.** The update job proposes; it never signs. What it may do is dispatch
 `Publish` for a commit already on `main` — a push made with `GITHUB_TOKEN` raises no push event, so
 without that the feed would keep serving the previous version. The key is never in that job; it is
-in the run it starts. A job that fetched whatever an upstream pushed in the last hour and signed it
-would hand this feed's key to every upstream at once.
+in the run it starts. A job that fetched whatever an upstream published since the last run and
+signed it would hand this feed's key to every upstream at once.
 
 **Landing on `main` is not, unless the author signed — and not more than twice a day.**
 `AUTO_MERGE="yes"` is offered only where a detached signature is verified against a pinned key, only

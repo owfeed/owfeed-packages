@@ -36,7 +36,7 @@ jobs:
     uses: owfeed/owfeed/.github/workflows/feed.yml@v0.5.0
     # So the publish job can read OWFEED_SIGN_KEY and OWFEED_USIGN_KEY from the
     # `feed` environment. They are environment secrets, not repository ones --
-    # the hourly update job and every pull-request check are outside that scope
+    # the scheduled update job and every pull-request check are outside that scope
     # and cannot reach them.
     secrets: inherit
     with:
