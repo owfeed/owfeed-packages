@@ -147,7 +147,43 @@ land() {
 	# fast-forward established first, the list below is exactly what this branch
 	# adds on top of `main`.
 	if ! git merge-base --is-ancestor "refs/remotes/origin/main" "$sha"; then
-		echo "$branch: main moved ahead of it; check-updates.sh rebuilds it next run"
+		# Behind `main` -- but that alone does not say whether there is anything
+		# left to do. Ask what the branch changed since it left `main`, and whether
+		# `main` already says the same thing.
+		#
+		# Asked of the branch's OWN files, never of the two trees: `main` moving on
+		# another package is ordinary, and a tree diff would count those files as
+		# this branch's doing and keep it alive forever. Measured: after `0.1.3` and
+		# `0.14.11` landed, five such branches accumulated, every one of them
+		# reporting "main moved ahead" on every hourly run with nothing left in it.
+		base="$(git merge-base "refs/remotes/origin/main" "$sha" 2>/dev/null || true)"
+		own="$(test -n "$base" && git diff --name-only "$base..$sha" || true)"
+		spent=yes
+		if [ -z "$own" ]; then
+			spent=yes
+		else
+			# One `git diff` per path. A single call with the whole list unquoted
+			# splits a path containing a space into two pathspecs, and a pathspec
+			# matching nothing answers "no difference" -- which would read as
+			# spent and delete a branch that is not.
+			oldifs="$IFS"; IFS='
+'
+			for f in $own; do
+				if ! git diff --quiet "refs/remotes/origin/main..$sha" -- "$f"; then
+					spent=no
+					break
+				fi
+			done
+			IFS="$oldifs"
+		fi
+
+		if [ "$spent" = yes ]; then
+			echo "$branch: its work is already in main; deleting the spent branch"
+			git push -q origin ":refs/heads/$branch" ||
+				echo "  branch not deleted; harmless, the next run tries again"
+		else
+			echo "$branch: main moved ahead of it; check-updates.sh rebuilds it next run"
+		fi
 		return 0
 	fi
 
