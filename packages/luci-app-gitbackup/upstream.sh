@@ -20,8 +20,8 @@ KIND="manifest"
 # 25.12-era, and upstream builds no ipk.
 
 REPO="VizzleTF/luci-app-gitbackup"
-VERSION="0.1.0-r1"
-TAG="v0.1.0"
+VERSION="0.1.1-r1"
+TAG="v0.1.1"
 
 # The shared usign release key, as for this author's other packages: one release
 # pipeline signs them all, and this feed already pins its public half. The EC key the
