@@ -55,7 +55,7 @@ own — which is why the shared key is tolerable rather than urgent. What separa
 blast radius: a compromise of one would reach nothing else.
 
 Adding or changing a key is the diff `.github/CODEOWNERS` names. The automation cannot reach it:
-the hourly job writes one file — `packages/<name>/upstream.sh` — and refuses even that when the diff
+the update job writes one file — `packages/<name>/upstream.sh` — and refuses even that when the diff
 moves anything but the version and its checksums, and `tools/land-updates.sh`, which is what pushes
 an update onto `main`, refuses any branch whose diff names another path. A key arrives in a pull
 request a person opened, and nothing pushes those.

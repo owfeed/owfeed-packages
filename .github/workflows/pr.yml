@@ -25,21 +25,21 @@ name: Check
 # once, the bot's #60 still came back `attempt 1 = action_required` (run
 # 33966648498), and both policies were put back. Measured on #45 as well: attempt 1
 # created 2026-09-02 and never ran, attempt 2 started two days later once a human
-# triggered it. With required checks on `main` such a pull request is BLOCKED for as
+# triggered it. A held run is a pull request nothing has checked, so it waits for as
 # long as nobody looks -- issue #53.
 #
 # So `check-updates.sh` opens no pull request for an update whose author signature it
 # already trusts. It pushes `update/<package>-<version>` and dispatches this
 # workflow on it; `tools/land-updates.sh` fast-forwards `main` onto that commit on a
-# later hourly run once these checks are green, and `main`'s branch protection
-# refuses the push with GH006 if they are not. An untrusted update still gets a pull
-# request, and this dispatch is what makes its checks report at all.
+# later run once these checks are green, and refuses to push when they are not. An
+# untrusted update still gets a pull request, and this dispatch is what makes its
+# checks report at all.
 #
 # GitHub's own exception is why a dispatch works where the other events do not:
 # "`workflow_dispatch` and `repository_dispatch` events always create workflow runs".
 # Check runs bind to a commit rather than to an event, so a run dispatched on the
-# branch reports `check / build` and `check / check` against the very commit the push
-# is evaluated against -- which is what the branch protection reads.
+# branch reports `check / build` and `check / check` against the very commit that is
+# about to be pushed -- which is what `tools/land-updates.sh` reads.
 #
 # Nothing about that path reaches a key. `dry-run: true` below is a constant, and
 # `feed.yml`'s publish job is gated on `if: !inputs.dry-run` -- not on the event and

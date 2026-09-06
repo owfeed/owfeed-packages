@@ -301,8 +301,9 @@ Replace `<name>` with your package name.
 
 ## I want to update a package
 
-Usually you do not. An hourly job asks each upstream for its latest release and opens the pull
-request for you, with the checksums recomputed from the bytes that release served.
+Usually you do not. A scheduled job asks each upstream for its latest release every few hours and
+proposes the update for you, with the checksums recomputed from the bytes that release served — as a
+branch that lands on its own where the package allows that, as a pull request otherwise.
 
 By hand: edit `VERSION` and the checksums in `upstream.sh`. Nothing else changes.
 
@@ -324,12 +325,12 @@ it was not replaced.
 
 The checks are never skipped either way.
 
-**How it lands, since there is no pull request.** The hourly job pushes
-`update/<name>-<version>` and starts the checks on it. The next run pushes that commit onto `main`,
+**How it lands, since there is no pull request.** The scheduled job pushes
+`update/<name>-<version>` and starts the checks on it. A later run pushes that commit onto `main`,
 but only when `check / build` and `check / check` are green on it and the diff touches nothing but
-one `packages/<name>/upstream.sh`; `main`'s branch protection refuses the push otherwise. So an
-update is typically live within two hours, through the same required checks a merge would have had
-to satisfy. There is no pull request because a pull request a bot opens cannot merge itself here —
+one `packages/<name>/upstream.sh`; `tools/land-updates.sh` refuses the push otherwise, and a context
+with no run at all counts as a refusal. Landing takes the checks plus the wait for the next
+scheduled run, which GitHub spaces a few hours apart. There is no pull request because a pull request a bot opens cannot merge itself here —
 GitHub creates its `pull_request` run in an approval-required state — which is what
 [issue #53](https://github.com/owfeed/owfeed-packages/issues/53) was.
 
@@ -349,7 +350,7 @@ So nothing crosses the boundary in either direction:
 ```
 your repository                              this feed
 ──────────────                               ─────────
-owfeed build                                 hourly: sees your release
+owfeed build                                 scheduled: sees your release
 owfeed sign          ← your key              verifies your signature against keys/
 publish a release    ──────────────────────► signs the index
                                              indexes, publishes
@@ -376,7 +377,7 @@ owfeed release --repo … --tag …   # signed manifest, and a .sig beside every
 ```
 
 **`owfeed release` is the step this feed reads.** It writes a signed inventory of the release and a
-detached signature beside every package, and the hourly job fetches `<asset>.sig` and checks it
+detached signature beside every package, and the update job fetches `<asset>.sig` and checks it
 against the key pinned in `keys/`. Without it there is nothing to verify, and the ingest stops
 rather than carrying something whose origin it cannot establish. A `.sha256` served from the same release does
 not substitute: it says the download was not corrupted and nothing about who produced it.
@@ -398,7 +399,7 @@ env:CI_COMMIT_SHA` records which commit produced it.
 ### On this side
 
 One pull request, once, adding `packages/<name>/upstream.sh` with your repository, your public key
-and the first pin — plus your key under `keys/`. After that the hourly job follows your releases and
+and the first pin — plus your key under `keys/`. After that the update job follows your releases and
 opens the updates itself.
 
 Adding your key is the diff that deserves a second look, so expect it to be read carefully. That is
@@ -466,7 +467,7 @@ Refused in every shape:
 - **A major version change.** That is where upstream changes what the package is: architectures
   dropped, files renamed, a configuration format the routers running the old one do not have.
   Whatever it turns out to be, it is not a decision to make at 04:00 with nobody watching.
-- **A diff touching anything but the pins.** The hourly job rewrites values with `sed`, so a changed
+- **A diff touching anything but the pins.** The update job rewrites values with `sed`, so a changed
   line anywhere else is either a bug in that job or an `upstream.sh` edited underneath it. It is
   also the only way `SIG_KEY_ID` could move, and that would be the verification quietly relaxing
   itself.
@@ -476,7 +477,7 @@ Refused in every shape:
   notifications, and every one of them verifies. The third waits for a person.
 
 **Nothing under `keys/`, `tools/` or `.github/` ever lands this way**, whatever an `AUTO_MERGE`
-says. Two independent gates hold that: the hourly job commits nothing but the pins inside one
+says. Two independent gates hold that: the update job commits nothing but the pins inside one
 `upstream.sh`, and `tools/land-updates.sh` compares the branch against `main` before pushing and
 refuses on any path but `packages/<name>/upstream.sh`. `.github/CODEOWNERS` names `keys/` as well,
 so a review is requested there — no branch rule requires it yet, for the reason in
