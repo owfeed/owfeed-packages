@@ -62,6 +62,80 @@ check / check'
 # one trusts its own sed, this one trusts nothing about how the branch was built.
 ALLOWED='^packages/[^/]*/upstream\.sh$'
 
+# Compare two dotted versions. Exit 0 when the first is strictly older than the
+# second, non-zero for every other answer INCLUDING "these cannot be ordered".
+#
+# Only plain dotted numbers are ordered. An upstream that versions `1.0-rc2` or by
+# date is not something to guess at when the answer decides whether a branch is
+# deleted, so anything else falls through to "not older" and the branch survives.
+version_older() {
+	awk -v a="$1" -v b="$2" 'BEGIN {
+		na = split(a, x, "."); nb = split(b, y, ".")
+		n = na > nb ? na : nb
+		for (i = 1; i <= n; i++) {
+			if (x[i] !~ /^[0-9]*$/ || y[i] !~ /^[0-9]*$/) exit 2
+			if (x[i] + 0 < y[i] + 0) exit 0
+			if (x[i] + 0 > y[i] + 0) exit 1
+		}
+		exit 1
+	}'
+}
+
+# Print why this branch has nothing left to offer, or print nothing.
+#
+# Two ways that happens, and both end in the same sweep:
+#
+#   its work is in `main` already -- every file it touched now matches `main`;
+#   `main` has moved past it -- it proposes a version older than the published one,
+#   which is not a pending update but a rollback, and must never land.
+#
+# Asked of the files the BRANCH changed since it left `main`, never of the two trees.
+# `main` moving on another package is ordinary, and a tree diff would blame this
+# branch for those files and keep it alive forever.
+#
+# Every uncertain answer is "keep": a wrong deletion loses work, a wrong keep costs
+# one line in an hourly log.
+superseded() {
+	_sha="$1"
+
+	_base="$(git merge-base "refs/remotes/origin/main" "$_sha" 2>/dev/null || true)"
+	[ -n "$_base" ] || return 0
+	_own="$(git diff --name-only "$_base..$_sha")"
+	[ -n "$_own" ] || { echo "it adds nothing on top of where it left main"; return 0; }
+
+	# One `git diff` per path, not one call with the whole list: an unquoted list
+	# splits a path containing a space into two pathspecs, and a pathspec matching
+	# nothing answers "no difference" -- which here would read as spent and delete
+	# a branch that was not.
+	_differs=no
+	_ifs="$IFS"
+	IFS='
+'
+	for _f in $_own; do
+		if ! git diff --quiet "refs/remotes/origin/main..$_sha" -- "$_f"; then
+			_differs=yes
+			break
+		fi
+	done
+	IFS="$_ifs"
+	[ "$_differs" = yes ] || { echo "every file it touches already matches main"; return 0; }
+
+	# It still differs. The one remaining sweep is the rollback: a single pin file
+	# naming a version older than the one `main` publishes. Read out of the file
+	# rather than out of the branch name, because the file is what would land.
+	[ "$(printf '%s\n' "$_own" | wc -l | tr -d ' ')" = 1 ] || return 0
+	printf '%s\n' "$_own" | grep -q "$ALLOWED" || return 0
+
+	_theirs="$(git show "$_sha:$_own" 2>/dev/null | sed -n 's/^VERSION="\([^"]*\)".*/\1/p')"
+	_ours="$(git show "refs/remotes/origin/main:$_own" 2>/dev/null | sed -n 's/^VERSION="\([^"]*\)".*/\1/p')"
+	[ -n "$_theirs" ] && [ -n "$_ours" ] || return 0
+
+	# `-r1` is this feed's packaging revision, not upstream's version, and it is
+	# not what makes an update a rollback.
+	version_older "${_theirs%-r*}" "${_ours%-r*}" || return 0
+	echo "it proposes $_theirs, behind the $_ours main publishes"
+}
+
 # Land one branch, or say why not and return. Never fails the run: one branch that
 # cannot land must not stop the next one, and none of the reasons below is an error
 # in the first place -- a check still running, a `main` that moved, a human's branch
@@ -81,6 +155,20 @@ land() {
 	pr="$(gh pr list -R "$SELF" --head "$branch" --state open --json number -q '.[0].number')"
 	if [ -n "$pr" ]; then
 		echo "$branch: pull request #$pr is open; a person merges that one"
+		return 0
+	fi
+
+	# Is there anything left in this branch at all? Asked BEFORE the checks,
+	# deliberately: a branch with nothing to land does not need green contexts to
+	# be swept up, and asking in the other order strands the oldest branches
+	# forever. Measured -- `update/luci-theme-footstrap-0.11.7` and `-0.12.9` were
+	# reported "not green yet" on every hourly run for weeks, each proposing a
+	# version this feed had passed long ago, because no run had ever been
+	# dispatched on them and the sweep sat behind that verdict.
+	if reason="$(superseded "$sha")" && [ -n "$reason" ]; then
+		echo "$branch: $reason; deleting it"
+		git push -q origin ":refs/heads/$branch" ||
+			echo "  branch not deleted; harmless, the next run tries again"
 		return 0
 	fi
 
@@ -146,44 +234,15 @@ land() {
 	# printed "REFUSED" and named a file the branch had never touched. With the
 	# fast-forward established first, the list below is exactly what this branch
 	# adds on top of `main`.
+	# Behind `main` and still carrying something `main` does not have: an ordinary
+	# race, and rebasing is not this script's job. `check-updates.sh` sees the
+	# branch no longer fast-forwards, rebuilds it on the current `main` and
+	# dispatches the checks again, against what would actually be published.
+	#
+	# A branch behind `main` with nothing left in it never reaches here -- the
+	# sweep above deleted it.
 	if ! git merge-base --is-ancestor "refs/remotes/origin/main" "$sha"; then
-		# Behind `main` -- but that alone does not say whether there is anything
-		# left to do. Ask what the branch changed since it left `main`, and whether
-		# `main` already says the same thing.
-		#
-		# Asked of the branch's OWN files, never of the two trees: `main` moving on
-		# another package is ordinary, and a tree diff would count those files as
-		# this branch's doing and keep it alive forever. Measured: after `0.1.3` and
-		# `0.14.11` landed, five such branches accumulated, every one of them
-		# reporting "main moved ahead" on every hourly run with nothing left in it.
-		base="$(git merge-base "refs/remotes/origin/main" "$sha" 2>/dev/null || true)"
-		own="$(test -n "$base" && git diff --name-only "$base..$sha" || true)"
-		spent=yes
-		if [ -z "$own" ]; then
-			spent=yes
-		else
-			# One `git diff` per path. A single call with the whole list unquoted
-			# splits a path containing a space into two pathspecs, and a pathspec
-			# matching nothing answers "no difference" -- which would read as
-			# spent and delete a branch that is not.
-			oldifs="$IFS"; IFS='
-'
-			for f in $own; do
-				if ! git diff --quiet "refs/remotes/origin/main..$sha" -- "$f"; then
-					spent=no
-					break
-				fi
-			done
-			IFS="$oldifs"
-		fi
-
-		if [ "$spent" = yes ]; then
-			echo "$branch: its work is already in main; deleting the spent branch"
-			git push -q origin ":refs/heads/$branch" ||
-				echo "  branch not deleted; harmless, the next run tries again"
-		else
-			echo "$branch: main moved ahead of it; check-updates.sh rebuilds it next run"
-		fi
+		echo "$branch: main moved ahead of it; check-updates.sh rebuilds it next run"
 		return 0
 	fi
 
@@ -193,16 +252,13 @@ land() {
 	# checks would be just as green for a branch that repointed a pinned key or
 	# edited the workflow that decides what runs. A new package needs a person
 	# and this is where that stays true.
+	# An empty list never reaches here either -- the sweep above catches it and
+	# deletes the branch. Kept as a guard rather than as a branch of logic: an
+	# empty `files` would make the pattern check below vacuously true, and "no
+	# paths to object to" must never read as "allowed".
 	files="$(git diff --name-only "refs/remotes/origin/main..$sha")"
 	if [ -z "$files" ]; then
-		# Already in `main`, byte for byte: the branch is spent, not pending.
-		# Deleting it is the whole point -- left alone it comes back every hour,
-		# reads "nothing to land" forever, and buries the branches that do need
-		# looking at. Measured: `0.1.3` landed and was immediately rebuilt on a
-		# stale head by the same run, leaving exactly such a branch behind.
-		echo "$branch: already in main; deleting the spent branch"
-		git push -q origin ":refs/heads/$branch" ||
-			echo "  branch not deleted; harmless, the next run tries again"
+		echo "$branch: nothing to land against main"
 		return 0
 	fi
 	stray="$(printf '%s\n' "$files" | grep -v "$ALLOWED" || true)"
