@@ -123,6 +123,18 @@ The manifest is verified **before** it is read, because every value in it steers
 never what it is about, so without that a manifest lifted from another of the author's releases
 would verify perfectly as this one.
 
+`TAG` is the tag as upstream writes it, `v` or no `v`. It is the thing that exists on the other
+side, and the update job compares it against what upstream reports rather than rebuilding it from
+`VERSION`. Where upstream appends a numeric suffix of its own — `0.19.17-2`, which is OpenWrt's
+`PKG_RELEASE` — that suffix is a revision of the same version, so it becomes the `-r<n>`:
+
+```sh
+VERSION="0.19.17-r2"
+TAG="0.19.17-2"
+```
+
+apk reads `-r<n>` as the revision and wants it last, so a version never carries both.
+
 Multi-architecture packages are the reason to prefer this shape. An apk's filename carries no
 architecture — in a feed the architecture is the directory — so twenty architectures mean twenty
 assets with one name, and `owfeed release` appends the architecture where names collide. The
@@ -305,7 +317,7 @@ Usually you do not. A scheduled job asks each upstream for its latest release ev
 proposes the update for you, with the checksums recomputed from the bytes that release served — as a
 branch that lands on its own where the package allows that, as a pull request otherwise.
 
-By hand: edit `VERSION` and the checksums in `upstream.sh`. Nothing else changes.
+By hand: edit `VERSION`, `TAG` and the checksums in `upstream.sh`. Nothing else changes.
 
 ```sh
 ./tools/fetch.sh packages/<name>     # fails if a checksum does not match

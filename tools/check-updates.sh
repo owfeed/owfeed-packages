@@ -134,6 +134,34 @@ may_automerge() {
 	return 0
 }
 
+# feed_version <upstream version>
+#
+# What this feed calls a release of that version. The `-r<n>` on the end is a
+# revision of the same upstream bytes, and apk wants that suffix last, so it is the
+# only one a version here may carry.
+#
+# Where upstream already appends a numeric suffix of its own -- OpenWrt's
+# PKG_RELEASE, which `Medvedolog/luci-app-podkop-bot` tags as `0.19.17-2` -- that
+# suffix means the same thing and maps onto `-r<n>`. Carrying it along instead
+# would produce `0.19.17-2-r1`: two revision numbers, the wrong one of them moving
+# on the next release, and a version apk orders differently from how whoever wrote
+# it meant it.
+feed_version() {
+	_ver="$1"
+	_tail="${_ver##*-}"
+	case "$_ver" in
+	*-*)
+		case "$_tail" in
+		''|*[!0-9]*) printf '%s-r1\n' "$_ver" ;;
+		*)           printf '%s-r%s\n' "${_ver%-*}" "$_tail" ;;
+		esac
+		;;
+	*)
+		printf '%s-r1\n' "$_ver"
+		;;
+	esac
+}
+
 # The branch to return to after each package, taken by name rather than by history.
 # `git checkout -` is `@{-1}`, which needs a branch switch recorded in the HEAD
 # reflog. In the clone the job works in that record is not there, so the first
@@ -154,11 +182,32 @@ for up in packages/*/upstream.sh; do
 	# A subshell per package: one package's variables never leak into the next.
 	(
 		. "./$up"
-		current="${VERSION%-r*}"
-		latest="$(gh release view --repo "$REPO" --json tagName -q .tagName 2>/dev/null | sed 's/^v//')"
 
-		[ -n "$latest" ] || { echo "$name: upstream has no releases"; exit 0; }
-		[ "$current" != "$latest" ] || { echo "$name: $current is current"; exit 0; }
+		# Compared as tags, because the tag is what exists upstream and the version
+		# is derived from it here. Deriving the tag back from the version assumed
+		# every project tags `v<version>`: `luci-app-podkop-bot` tags `0.19.17-2`,
+		# so the reconstruction asked for `v0.19.17-2`, got "release not found",
+		# and under `set -e` took the run down on the fourth of six packages --
+		# the two after it were never checked at all. The default below is
+		# fetch.sh's, so a package that pins no tag is still compared against
+		# exactly the tag fetch.sh would download for it.
+		current_tag="${TAG:-v${VERSION%-r*}}"
+		# `|| true` is load-bearing under `set -e`: an assignment takes the exit
+		# status of its command substitution, so a repository with no releases at
+		# all -- or a `gh` that could not reach GitHub -- would kill this subshell
+		# here, before the line below can say so. It used to survive that by
+		# accident: the old command ended in `| sed`, and a pipeline reports its
+		# last command.
+		latest_tag="$(gh release view --repo "$REPO" --json tagName -q .tagName 2>/dev/null || true)"
+
+		[ -n "$latest_tag" ] || { echo "$name: upstream has no releases"; exit 0; }
+
+		# Versions, for what reads a version rather than a tag: the major-bump
+		# refusal, an `apk` shape's artifact names, and anyone reading the branch.
+		current="${current_tag#v}"
+		latest="${latest_tag#v}"
+
+		[ "$current_tag" != "$latest_tag" ] || { echo "$name: $current is current"; exit 0; }
 
 		branch="update/${name}-${latest}"
 
@@ -189,7 +238,7 @@ for up in packages/*/upstream.sh; do
 		if [ -n "$remote_sha" ]; then
 			git fetch -q origin "+refs/heads/$branch:refs/remotes/origin/$branch"
 			have="$(git show "refs/remotes/origin/$branch:$up" 2>/dev/null || true)"
-			want="VERSION=\"${latest}-r1\""
+			want="VERSION=\"$(feed_version "$latest")\""
 			case "$have" in
 			*"$want"*)
 				if git merge-base --is-ancestor HEAD "refs/remotes/origin/$branch"; then
@@ -211,22 +260,34 @@ for up in packages/*/upstream.sh; do
 		# none of them would be pure waste.
 		pattern='*'
 		[ "$KIND" = "manifest" ] && pattern='manifest.txt'
-		gh release download "v$latest" --repo "$REPO" --dir "$tmp" --pattern "$pattern" >/dev/null
+		gh release download "$latest_tag" --repo "$REPO" --dir "$tmp" --pattern "$pattern" >/dev/null
 
 		# Recompute the pins from the bytes the release actually served, rewriting
 		# values in place. Nothing but data changes, so the diff is readable.
-		sed -i "s|^VERSION=.*|VERSION=\"${latest}-r1\"|" "$up"
+		sed -i "s|^VERSION=.*|VERSION=\"$(feed_version "$latest")\"|" "$up"
+
+		# The tag is a pin in every shape, not only in `manifest`. fetch.sh defaults
+		# it to `v<version>`, and that default is wrong for an upstream tagging
+		# `0.19.17-2` -- the more so once that `-2` has become the `-r2` above,
+		# where the default can no longer see it. A package that pinned no tag gets
+		# one written here, beside the version it belongs with.
+		if grep -q '^TAG=' "$up"; then
+			sed -i "s|^TAG=.*|TAG=\"${latest_tag}\"|" "$up"
+		else
+			sed -i "s|^VERSION=.*|&\nTAG=\"${latest_tag}\"|" "$up"
+		fi
 
 		case "$KIND" in
 		manifest)
-			# The tag is the pin. There are no checksums here to recompute: they are
-			# in the manifest, and the author's signature is what makes them worth
-			# anything -- which is why this shape can be trusted to merge itself.
-			sed -i "s|^TAG=.*|TAG=\"v${latest}\"|" "$up"
+			# The tag pinned above is the whole update. There are no checksums here
+			# to recompute: they are in the manifest, and the author's signature is
+			# what makes them worth anything -- which is why this shape can be
+			# trusted to merge itself.
+			:
 			;;
 		apk)
 			file="$(echo "$ARTIFACT" | sed "s/${current}/${latest}/g")"
-			[ -f "$tmp/$file" ] || { echo "$name: v$latest publishes no $file" >&2; exit 1; }
+			[ -f "$tmp/$file" ] || { echo "$name: $latest_tag publishes no $file" >&2; exit 1; }
 			sed -i "s|^ARTIFACT=.*|ARTIFACT=\"${file}\"|" "$up"
 			sed -i "s|^SHA256=.*|SHA256=\"$(sha256sum "$tmp/$file" | cut -d' ' -f1)\"|" "$up"
 
@@ -236,7 +297,7 @@ for up in packages/*/upstream.sh; do
 			# update of a package serving both lines arrives broken.
 			if [ -n "${ARTIFACT_IPK:-}" ]; then
 				file_ipk="$(echo "$ARTIFACT_IPK" | sed "s/${current}/${latest}/g")"
-				[ -f "$tmp/$file_ipk" ] || { echo "$name: v$latest publishes no $file_ipk" >&2; exit 1; }
+				[ -f "$tmp/$file_ipk" ] || { echo "$name: $latest_tag publishes no $file_ipk" >&2; exit 1; }
 				sed -i "s|^ARTIFACT_IPK=.*|ARTIFACT_IPK=\"${file_ipk}\"|" "$up"
 				sed -i "s|^SHA256_IPK=.*|SHA256_IPK=\"$(sha256sum "$tmp/$file_ipk" | cut -d' ' -f1)\"|" "$up"
 			fi
@@ -247,7 +308,7 @@ for up in packages/*/upstream.sh; do
 			# untouched.
 			echo "$ARTIFACTS" | while read -r artifact _ arches; do
 				[ -n "$artifact" ] || continue
-				[ -f "$tmp/$artifact" ] || { echo "$name: v$latest publishes no $artifact" >&2; exit 1; }
+				[ -f "$tmp/$artifact" ] || { echo "$name: $latest_tag publishes no $artifact" >&2; exit 1; }
 				printf '%s  %s  %s\n' "$artifact" "$(sha256sum "$tmp/$artifact" | cut -d' ' -f1)" "$arches"
 			done > "$tmp/table"
 			awk -v table="$(cat "$tmp/table")" '
@@ -313,7 +374,7 @@ Pins recomputed from the bytes the release served."
 			# every package after this one still has to be checked. Reported
 			# rather than swallowed: an update whose pull request never opened
 			# is an update nobody is looking at.
-			if url="$(gh pr create -R "$SELF" --title "$name: $current -> $latest" --body "Upstream released \`v$latest\`.
+			if url="$(gh pr create -R "$SELF" --title "$name: $current -> $latest" --body "Upstream released \`$latest_tag\`.
 
 $evidence
 
