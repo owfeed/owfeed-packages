@@ -27,6 +27,7 @@ that is not the release you are about to trust it for.
 |---|---|---|
 | `vizzletf-release.pub` | `18c63865e2bcf8d6` | `luci-theme-footstrap`, `luci-app-footstrap-cmd`, `luci-app-footstrap-files`, `luci-app-gitbackup` |
 | `podkop-updater.pub` | `37ddece4c0eef357` | `podkop-updater` |
+| `luci-app-podkop-bot.pub` | `d6971b8a1b9a8ba4` | `luci-app-podkop-bot` |
 
 ### EC — package signatures, checked on the router by anyone who wants to
 
@@ -39,6 +40,7 @@ One per repository, which is what the note below asks for and what these meet.
 | `luci-app-footstrap-files.pub.pem` | `b965f2fd1eb4a823b2e1f98736ce8572` | `luci-app-footstrap-files` |
 | `luci-app-gitbackup.pub.pem` | `ed03b80eb79ce317685eb5edc6b23dd0` | `luci-app-gitbackup` |
 | `podkop-updater.pub.pem` | `2e6784ccfa5af1f908b5904d26067249` | `podkop-updater` |
+| `luci-app-podkop-bot.pub.pem` | `d4627673734fe2b54f54770c2c1d3c6c` | `luci-app-podkop-bot` |
 
 `signing.author-keys` in `owfeed.yml` points at this directory, and `owfeed doctor` fails any
 package that carries no signature by one of these. Only files ending in `.pem` are read for that; the usign
