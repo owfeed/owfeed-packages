@@ -184,7 +184,18 @@ for up in packages/*/upstream.sh; do
 	name="$(basename "$dir")"
 
 	# A subshell per package: one package's variables never leak into the next.
+	#
+	# Its status is read with `set +e` around it, NOT with `( ... ) || handler`.
+	# POSIX ignores `set -e` for every command inside the left side of `||`, subshell
+	# included, and the `set -e` inside does not turn it back on. Measured with
+	# #68's `|| {` handler: `gh release download` printed "release not found",
+	# the body carried on, rewrote the pin to the tag it never downloaded, pushed
+	# the branch and dispatched checks on it -- and the run went green. Only the
+	# explicit `exit 1`s still stopped a package. Reproduced in dash and in bash's
+	# sh mode; tools/test-check-updates.sh (a0-unfetchable) is the case.
+	set +e
 	(
+		set -e
 		. "./$up"
 
 		# Compared as tags, because the tag is what exists upstream and the version
@@ -422,7 +433,10 @@ can be merged.")"; then
 		fi
 		git checkout -q "$BASE"
 		git checkout -q "$up"
-	) || {
+	)
+	stopped=$?
+	set -e
+	if [ "$stopped" -ne 0 ]; then
 		# One package stopping must not stop the others. The body runs in a
 		# subshell, and under `set -eu` a subshell that exits non-zero ends the
 		# `for` itself -- so an `exit 1` above for one release took every package
@@ -438,7 +452,7 @@ can be merged.")"; then
 		echo "$name: stopped; the remaining packages are still checked" >&2
 		git checkout -q -f "$BASE"
 		failed="$failed $name"
-	}
+	fi
 done
 
 # Still red when anything stopped. Continuing past a failure is about checking the
