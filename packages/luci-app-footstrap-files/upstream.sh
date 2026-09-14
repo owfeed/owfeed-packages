@@ -1,6 +1,5 @@
-# luci-app-footstrap-files — a file manager for LuCI: browse, upload, download, edit
-# with highlighting, and change mode and owner, with the translation catalogue that
-# goes with it.
+# luci-app-footstrap-files — a LuCI application package, and the translation catalogue
+# that goes with it.
 #
 # Data only. tools/fetch.sh does the work; tools/check-updates.sh rewrites the
 # version here and touches nothing else.
