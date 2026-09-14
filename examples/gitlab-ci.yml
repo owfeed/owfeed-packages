@@ -19,7 +19,7 @@ stages: [build, release]
 variables:
   # Pin a release. The tool that signs what you publish should move when you change
   # this line, not whenever owfeed is pushed to.
-  OWFEED_VERSION: "v0.5.3"
+  OWFEED_VERSION: "v0.5.4"
 
 build:
   stage: build

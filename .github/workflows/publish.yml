@@ -38,7 +38,7 @@ jobs:
     # tagged with, so this line is the whole pin. It used to be a second pin
     # beside it, and dependabot moved only this one -- the feed ran feed.yml@v0.5.1
     # with an owfeed v0.4.5 binary from #65 until this line was fixed.
-    uses: owfeed/owfeed/.github/workflows/feed.yml@v0.5.3
+    uses: owfeed/owfeed/.github/workflows/feed.yml@v0.5.4
     # So the publish job can read OWFEED_SIGN_KEY and OWFEED_USIGN_KEY from the
     # `feed` environment. They are environment secrets, not repository ones --
     # the scheduled update job and every pull-request check are outside that scope
