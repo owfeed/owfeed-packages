@@ -143,10 +143,11 @@ superseded() {
 	echo "it proposes $_theirs, behind the $_ours main publishes"
 }
 
-# Land one branch, or say why not and return. Never fails the run: one branch that
-# cannot land must not stop the next one, and none of the reasons below is an error
-# in the first place -- a check still running, a `main` that moved, a human's branch
-# that is none of this script's business.
+# Land one branch, or say why not and return. Returns 0 for every ordinary reason not
+# to land -- a check still running, a `main` that moved, a pull request waiting for a
+# person, a branch already spent -- because none of those is an error. Returns 1 only
+# when a step could not run; the loop at the bottom carries on to the next branch and
+# makes the run red at the end.
 land() {
 	branch="$1"
 	sha="$2"
@@ -338,17 +339,38 @@ if [ -z "$refs" ]; then
 	exit 0
 fi
 
-# `|| echo` on the call, not `set +e` around the loop: an unexpected failure inside
+# `if ! land` on the call, not `set +e` around the loop: an unexpected failure inside
 # `land` -- a `gh` outage, a git object that is not there -- must cost that one
 # branch and not every branch after it. Under plain `set -eu` the first one would
 # take the job down with the rest unread, which is the failure mode this repository
 # keeps re-learning (see the `checkout -` note in check-updates.sh).
 #
-# The price of `||`: POSIX turns errexit off for everything `land` runs, so nothing
-# inside it stops on its own. Every step there whose failure would read as a
-# harmless answer checks its own status and returns -- keep it that way when
-# adding one.
-printf '%s\n' "$refs" | while read -r sha ref; do
+# The price: POSIX turns errexit off for everything `land` runs when it is an `if`
+# condition, so nothing inside it stops on its own. Every step there whose failure
+# would read as a harmless answer checks its own status and returns 1 -- keep it
+# that way when adding one.
+#
+# A here-document rather than `printf | while`, so the loop runs in this shell and
+# `failed` survives it; a pipeline would run the loop in a subshell and lose it.
+# `land` reads nothing from stdin, and `</dev/null` keeps any `gh` or `git` in it
+# from swallowing the rest of the branch list.
+failed=""
+while read -r sha ref; do
 	branch="${ref#refs/heads/}"
-	land "$branch" "$sha" || echo "$branch: not landed this run (the step above failed)"
-done
+	if ! land "$branch" "$sha" </dev/null; then
+		echo "$branch: not landed this run (the step above failed)"
+		failed="$failed $branch"
+	fi
+done <<EOF
+$refs
+EOF
+
+# Red when a step failed, after every branch has been read -- the same shape as the
+# end of check-updates.sh. Green here used to mean "nothing failed" and "a `gh`
+# outage stopped every branch" alike, and a scheduled run nobody watches only gets
+# looked at when it is red.
+if [ -n "$failed" ]; then
+	echo "not landed because a step failed:$failed" >&2
+	echo "  every other branch was still read; the lines above name the command that failed" >&2
+	exit 1
+fi

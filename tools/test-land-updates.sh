@@ -119,19 +119,35 @@ cat >"$work/gh" <<'STUB'
 set -eu
 case "${1:-} ${2:-}" in
 "pr list")
-	# No pull request is open on any branch here. The human gate has its own
-	# reason to exist and is not what this test is about -- except that a call
-	# which FAILS must never read as "none is open", which the flag below pins.
-	if [ -f "$GH_STATE/pr-list-fails" ]; then
+	# gh pr list -R <repo> --head <branch> --state open ...
+	#
+	# No pull request is open unless `pr-open` names the branch. A call that
+	# FAILS must never read as "none is open": `pr-list-fails` makes it fail for
+	# the branch it names, or for every branch when it is empty.
+	head=""
+	prev=""
+	for a in "$@"; do
+		[ "$prev" != "--head" ] || head="$a"
+		prev="$a"
+	done
+	if [ -f "$GH_STATE/pr-list-fails" ] &&
+		{ [ ! -s "$GH_STATE/pr-list-fails" ] || [ "$(cat "$GH_STATE/pr-list-fails")" = "$head" ]; }; then
 		echo "HTTP 502: Bad Gateway" >&2
 		exit 1
+	fi
+	if [ -f "$GH_STATE/pr-open" ] && [ "$(cat "$GH_STATE/pr-open")" = "$head" ]; then
+		echo 42
 	fi
 	;;
 "api "*"/git/matching-refs/heads/update/")
 	cat "$GH_STATE/refs"
 	;;
 "api "*"/check-runs"*)
-	printf 'completed/success\tcheck / build\ncompleted/success\tcheck / check\n'
+	if [ -f "$GH_STATE/checks-pending" ]; then
+		printf 'in_progress/pending\tcheck / build\nqueued/pending\tcheck / check\n'
+	else
+		printf 'completed/success\tcheck / build\ncompleted/success\tcheck / check\n'
+	fi
 	;;
 *)
 	echo "stub gh: unexpected call: $*" >&2
@@ -147,11 +163,21 @@ chmod +x "$work/bin/gh"
 # API sorts it. `tr` because ls-remote separates with a tab and `gh -q` with a space.
 listing() { git ls-remote --heads origin 'update/*' | tr '\t' ' ' >"$GH_STATE/refs"; }
 
+status=0
 run() {
-	if ! PATH="$work/bin:$PATH" GITHUB_REPOSITORY="owfeed/test" sh "$script" >"$1" 2>&1; then
-		no "land-updates.sh exited non-zero"
-	fi
+	status=0
+	PATH="$work/bin:$PATH" GITHUB_REPOSITORY="owfeed/test" sh "$script" >"$1" 2>&1 || status=$?
 	sed 's/^/     | /' "$1"
+}
+
+# The run's colour, both ways. Only a step that could not run is red; every ordinary
+# reason not to land is green, or the scheduled job is red on a normal hour and
+# nobody reads it any more.
+green() {
+	if [ "$status" = 0 ]; then ok "the run exits 0: $1"; else no "the run exited $status: $1 is not a failure"; fi
+}
+red() {
+	if [ "$status" != 0 ]; then ok "the run is red: $1"; else no "the run exited 0 although $1"; fi
 }
 
 logged() {
@@ -179,6 +205,7 @@ kept() {
 echo "--- first run"
 listing
 run "$work/out"
+green "branches deleted, landed and waiting for a rebuild"
 
 gone update/alpha-1.2.0
 logged "$work/out" "update/alpha-1.2.0: every file it touches already matches main; deleting it"
@@ -215,6 +242,7 @@ fi
 echo "--- second run"
 listing
 run "$work/out2"
+green "a branch main moved ahead of"
 lines="$(wc -l <"$work/out2" | tr -d ' ')"
 if [ "$lines" = 1 ] && grep -q '^update/delta-3.0.0: ' "$work/out2"; then
 	ok "the second run reports only the branch that is waiting for a rebuild"
@@ -271,6 +299,7 @@ offer
 listing
 run "$work/out3"
 rm -f "$GH_STATE/pr-list-fails"
+red "gh pr list failed"
 kept update/gamma-1.2.0
 unmoved
 logged "$work/out3" "update/gamma-1.2.0: could not read its pull requests"
@@ -281,10 +310,12 @@ echo "--name-only" >"$GH_STATE/git-fails"
 listing
 run "$work/out4"
 rm -f "$GH_STATE/git-fails"
+red "git diff failed"
 kept update/gamma-1.2.0
 kept update/delta-3.0.0
 unmoved
 logged "$work/out4" "cannot tell what"
+logged "$work/out4" "update/delta-3.0.0: main moved ahead of it"
 
 echo "--- fifth run: git fetch fails"
 offer
@@ -292,20 +323,48 @@ echo "fetch" >"$GH_STATE/git-fails"
 listing
 run "$work/out5"
 rm -f "$GH_STATE/git-fails"
+red "git fetch failed"
 kept update/gamma-1.2.0
 unmoved
 logged "$work/out5" "update/gamma-1.2.0: could not fetch"
 
-echo "--- sixth run: nothing fails"
+# One branch fails and the one after it is still read. delta sorts first, so gamma
+# landing is the proof the loop went on -- and that the branch kept by every failure
+# above was landable all along.
+echo "--- sixth run: gh pr list fails for the first branch only"
 offer
+echo update/delta-3.0.0 >"$GH_STATE/pr-list-fails"
 listing
 run "$work/out6"
+rm -f "$GH_STATE/pr-list-fails"
+red "one branch could not be read"
+logged "$work/out6" "update/delta-3.0.0: could not read its pull requests"
+logged "$work/out6" "not landed because a step failed: update/delta-3.0.0"
 head="$(git ls-remote origin refs/heads/main | cut -f1)"
 if [ "$head" = "$gamma2" ]; then
-	ok "the same branch lands once nothing fails"
+	ok "the branch after the failure was still read, and landed"
 else
-	no "main is $head, expected $gamma2: the branch kept above was not landable anyway"
+	no "main is $head, expected $gamma2: the loop stopped at the failure, or the branch was not landable"
 fi
+
+# The ordinary reasons not to land stay green.
+echo "--- seventh run: checks still running"
+: >"$GH_STATE/checks-pending"
+listing
+run "$work/out7"
+rm -f "$GH_STATE/checks-pending"
+green "checks still running"
+logged "$work/out7" "update/delta-3.0.0: not green yet"
+kept update/delta-3.0.0
+
+echo "--- eighth run: a pull request is open"
+echo update/delta-3.0.0 >"$GH_STATE/pr-open"
+listing
+run "$work/out8"
+rm -f "$GH_STATE/pr-open"
+green "a pull request waiting for a person"
+logged "$work/out8" "update/delta-3.0.0: pull request #42 is open"
+kept update/delta-3.0.0
 
 if [ "$result" = 0 ]; then
 	echo "PASS"

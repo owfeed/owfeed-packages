@@ -48,9 +48,16 @@ jobs:
   #
   # First, so a branch that went green since the last run is on `main` before
   # `check-updates.sh` compares anything against `main`, and before the publish job
-  # below asks whether `main` has been published. `!cancelled()` rather than
-  # `success()`: a failure here is a branch that did not land, and it must not stop
-  # the scheduled check from finding new releases.
+  # below asks whether `main` has been published.
+  #
+  # This job goes red when a step failed on any branch -- a `gh` or `git` call that
+  # could not run -- after it has tried every other branch. The jobs below carry
+  # `!cancelled()` rather than `success()`, which is what makes red here safe: a
+  # branch that did not land must not stop the scheduled check from finding new
+  # releases, and `main` may still need publishing for a commit that landed earlier
+  # in this run or by a human merge. Red is kept rather than swallowed with
+  # `continue-on-error`, because that would show a green run for an hour in which
+  # nothing could be landed.
   land:
     runs-on: ubuntu-latest
     permissions:
