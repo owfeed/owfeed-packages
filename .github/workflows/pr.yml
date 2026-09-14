@@ -113,9 +113,12 @@ jobs:
     # Pinned to a release, not tracked at @main. This repository signs what it
     # publishes; the workflow that shapes the signing should move when someone
     # changes this line, not whenever an unrelated repository is pushed to.
-    uses: owfeed/owfeed/.github/workflows/feed.yml@v0.5.1
+    # No owfeed-version: since v0.5.2 the workflow installs the release it is
+    # tagged with, so this line is the whole pin. It used to be a second pin
+    # beside it, and dependabot moved only this one -- the feed ran feed.yml@v0.5.1
+    # with an owfeed v0.4.5 binary from #65 until this line was fixed.
+    uses: owfeed/owfeed/.github/workflows/feed.yml@v0.5.2
     with:
-      owfeed-version: v0.4.5
       dry-run: true
       pre-build: for d in packages/*/; do ./tools/fetch.sh "$d"; done
       post-index: ./tools/check-tree.sh && ./tools/check-origin.sh && ./tools/sources.sh
