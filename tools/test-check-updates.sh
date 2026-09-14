@@ -302,6 +302,37 @@ else no "the second run downloaded $((after - before)) release(s); only a0-unfet
 # that goes green on the next run is a failure nobody ever sees.
 if [ "$status" -ne 0 ]; then ok "the second run is red too"; else no "the failure stopped being reported"; fi
 
+# `may_automerge` runs as an `if` condition, where POSIX switches errexit off. A git
+# call inside it that fails hands the next line an empty answer, and both empty
+# answers there mean "yes": no recent updates (under the daily ceiling), no diff
+# outside the pins. A failed read has to be a pull request instead.
+realgit="$(command -v git)"
+cat >"$bin/git" <<SHIM
+#!/bin/sh
+if [ -f "\$GH_STATE/git-fails" ] && [ "\${1:-}" = "\$(cat "\$GH_STATE/git-fails")" ]; then
+	echo "fatal: stub git refused: git \$*" >&2
+	exit 128
+fi
+exec "$realgit" "\$@"
+SHIM
+chmod +x "$bin/git"
+
+echo "--- third run: git log fails while counting recent updates"
+release example/d-vprefix v1.2.0
+echo log >"$GH_STATE/git-fails"
+run "$work/out3"
+rm -f "$GH_STATE/git-fails"
+said "$work/out3" "d-vprefix: https://example.invalid/pull/1"
+unsaid "$work/out3" "d-vprefix: update/d-vprefix-1.2.0 pushed, no pull request"
+
+echo "--- fourth run: git diff fails while reading what moved"
+release example/c-noprefix 2026.09
+echo diff >"$GH_STATE/git-fails"
+run "$work/out4"
+rm -f "$GH_STATE/git-fails"
+said "$work/out4" "c-noprefix: https://example.invalid/pull/1"
+unsaid "$work/out4" "c-noprefix: update/c-noprefix-2026.09 pushed, no pull request"
+
 if [ "$result" = 0 ]; then
 	echo "PASS"
 else
