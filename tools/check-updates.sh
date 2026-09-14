@@ -225,15 +225,40 @@ for up in packages/*/upstream.sh; do
 		# fetch.sh's, so a package that pins no tag is still compared against
 		# exactly the tag fetch.sh would download for it.
 		current_tag="${TAG:-v${VERSION%-r*}}"
-		# `|| true` is load-bearing under `set -e`: an assignment takes the exit
-		# status of its command substitution, so a repository with no releases at
-		# all -- or a `gh` that could not reach GitHub -- would kill this subshell
-		# here, before the line below can say so. It used to survive that by
-		# accident: the old command ended in `| sed`, and a pipeline reports its
-		# last command.
-		latest_tag="$(gh release view --repo "$REPO" --json tagName -q .tagName 2>/dev/null || true)"
+		# Scratch space for this package, removed however the subshell ends. Made
+		# before the first `gh` call, whose stderr is read below.
+		tmp="$(mktemp -d)"
+		trap 'rm -rf "$tmp"' EXIT
 
-		[ -n "$latest_tag" ] || { echo "$name: upstream has no releases"; exit 0; }
+		# "Upstream has no releases" and "could not ask" are different answers, and
+		# only the first is green. This was `2>/dev/null || true`, which read a 401,
+		# a 502 or a dropped connection as "no releases" and left the run green with
+		# the package never checked -- a check that cannot run counts as failed.
+		#
+		# gh does not tell them apart by exit code. Measured with gh 2.99.0: a
+		# repository with no releases (octocat/Hello-World), a repository that does
+		# not exist, a bad token and an unreachable proxy all exit 1. The first two
+		# print exactly `release not found` -- both are a 404 on /releases/latest --
+		# and the others print the HTTP or transport error. So `release not found` is
+		# confirmed with a question an existing repository answers and a missing one
+		# fails, the release list; a renamed or deleted upstream is a REPO to fix,
+		# not a quiet hour. Every other failure stops this package through the
+		# handler after the subshell.
+		if ! latest_tag="$(gh release view --repo "$REPO" --json tagName -q .tagName 2>"$tmp/view.err")"; then
+			if [ "$(cat "$tmp/view.err")" = "release not found" ] &&
+				gh api "repos/$REPO/releases?per_page=1" -q length >/dev/null 2>"$tmp/list.err"; then
+				echo "$name: upstream has no releases"
+				exit 0
+			fi
+			{
+				echo "$name: could not read the latest release of $REPO"
+				cat "$tmp/view.err" "$tmp/list.err" 2>/dev/null | sed 's/^/  /'
+				echo "  failed: gh release view --repo $REPO --json tagName, then gh api repos/$REPO/releases"
+				echo "  a renamed or deleted repository needs REPO fixed in $up; an outage clears on a later run"
+			} >&2
+			exit 1
+		fi
+		[ -n "$latest_tag" ] || { echo "$name: gh release view answered an empty tag for $REPO" >&2; exit 1; }
 
 		# Versions, for what reads a version rather than a tag: the major-bump
 		# refusal, an `apk` shape's artifact names, and anyone reading the branch.
@@ -294,9 +319,6 @@ for up in packages/*/upstream.sh; do
 			fi
 		fi
 		echo "$name: $current -> $latest"
-
-		tmp="$(mktemp -d)"
-		trap 'rm -rf "$tmp"' EXIT
 
 		# Only what this shape needs to recompute its pins. A manifest package pins
 		# no checksums at all -- they are in the manifest, under the author's
