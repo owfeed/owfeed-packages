@@ -42,9 +42,19 @@ trap 'rm -f "$rows" "$missing" "$named"' EXIT
 # package's own pkginfo, so `.url` is what `apk info` prints. A noarch package
 # appears in every architecture's index and is wanted once, which is what the
 # sort -u below is for.
-find "$OUT" -name index.json -exec \
+#
+# No `2>/dev/null || true` on either read. That pair hid a jq or awk that failed on
+# one index, and every package in it went unchecked while the rest passed -- a check
+# that cannot run counts as failed. `find` matching nothing still exits 0; `find`
+# exits non-zero when an `-exec ... {} +` invocation does.
+if ! find "$OUT" -name index.json -exec \
 	jq -r '.packages[]? | ["apk", .name, .version, (.url // "")] | @tsv' {} + \
-	>> "$rows" 2>/dev/null || true
+	>> "$rows"; then
+	echo "tools/check-origin.sh: could not read every index.json under $OUT" >&2
+	echo "  failed: find $OUT -name index.json -exec jq -r '.packages[]? | ...' {} +" >&2
+	echo "  jq's own error is above; rebuild the index (owfeed index) and re-run" >&2
+	exit 1
+fi
 
 # opkg, from the text index. Both spellings are read because both appear in
 # practice: a package built by OpenWrt's SDK carries the repository in `URL:` and
@@ -54,7 +64,7 @@ find "$OUT" -name index.json -exec \
 #
 # Continuation lines cannot be mistaken for fields here: opkg indents them with a
 # space, and `Description:` -- the only multi-line field -- is written last.
-find "$OUT" -name Packages -type f -exec awk '
+if ! find "$OUT" -name Packages -type f -exec awk '
 	function flush() {
 		if (name != "") {
 			origin = (url != "") ? url : source
@@ -73,7 +83,12 @@ find "$OUT" -name Packages -type f -exec awk '
 	/^URL: /        { url     = substr($0, 6)  }
 	/^Source: /     { source  = substr($0, 9)  }
 	END             { flush() }
-' {} + >> "$rows" 2>/dev/null || true
+' {} + >> "$rows"; then
+	echo "tools/check-origin.sh: could not read every Packages index under $OUT" >&2
+	echo "  failed: find $OUT -name Packages -type f -exec awk ... {} +" >&2
+	echo "  awk's own error is above; rebuild the index (owfeed index) and re-run" >&2
+	exit 1
+fi
 
 [ -s "$rows" ] || { echo "tools/check-origin.sh: no package found in any index under $OUT" >&2; exit 1; }
 

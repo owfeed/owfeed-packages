@@ -78,15 +78,27 @@ fi
 
 # Everything the tree publishes, from the JSON index owfeed writes beside each binary
 # one. A noarch package appears in every architecture's index and is wanted once.
-packages="$(find "$OUT" -name index.json -exec \
-	jq -r '.packages[]? | [.name, .version, (.license // "")] | @tsv' {} + 2>/dev/null \
-	| sort -u)"
-
-[ -n "$packages" ] || { echo "tools/sources.sh: no package found in any index.json under $OUT" >&2; exit 1; }
-
+#
+# Written to a file and sorted afterwards, never piped. `find ... | sort` reports
+# sort's status, and jq's stderr went to /dev/null: an index.json jq could not parse
+# dropped that index's packages from this check without a word, while the readable
+# indexes beside it passed -- a copyleft package in the broken one was published
+# with no source. `find` exits non-zero when any `-exec ... {} +` invocation does.
 missing="$(mktemp)"
 listed="$(mktemp)"
-trap 'rm -f "$missing" "$listed"' EXIT
+rows="$(mktemp)"
+trap 'rm -f "$missing" "$listed" "$rows"' EXIT
+
+if ! find "$OUT" -name index.json -exec \
+	jq -r '.packages[]? | [.name, .version, (.license // "")] | @tsv' {} + > "$rows"; then
+	echo "tools/sources.sh: could not read every index.json under $OUT, so no licence is trusted" >&2
+	echo "  failed: find $OUT -name index.json -exec jq -r '.packages[]? | ...' {} +" >&2
+	echo "  jq's own error is above; rebuild the index (owfeed index) and re-run" >&2
+	exit 1
+fi
+packages="$(sort -u "$rows")"
+
+[ -n "$packages" ] || { echo "tools/sources.sh: no package found in any index.json under $OUT" >&2; exit 1; }
 
 printf '%s\n' "$packages" | while IFS="$TAB" read -r name version licence; do
 	[ -n "${name:-}" ] || continue

@@ -219,5 +219,21 @@ else
 	ok "no record: an archive found by name is still source, with no origin claimed"
 fi
 
+# An index this cannot parse. Its packages are packages whose licence nobody read, so
+# the publish has to stop -- the readable index beside it passing on its own is
+# exactly how a copyleft package in the broken one used to go out without source.
+d="$(scenario unreadable-index)"
+index "$d" "example-daemon 1.0-r1 Apache-2.0"
+mkdir -p "$d/out/releases/25.12/aarch64_generic"
+printf '{"packages":[{"name":"luci-app-example",' \
+	> "$d/out/releases/25.12/aarch64_generic/index.json"
+if run "$d"; then
+	bad "unreadable index" "published past an index.json it could not parse"
+elif ! says "$d" "could not read every index.json"; then
+	bad "unreadable index" "refused without saying which step failed: $(cat "$d/stderr")"
+else
+	ok "unreadable index: an index that cannot be read refuses the publish"
+fi
+
 [ "$fails" -eq 0 ] || { echo "tools/sources.sh: $fails case(s) failed" >&2; exit 1; }
 echo "tools/sources.sh: every case passed"
