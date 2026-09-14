@@ -134,8 +134,19 @@ nothing reported.
 container output: usually a dependency that does not resolve on a stock image, or a file installed
 somewhere nothing looks.
 
-**`sha256 … pinned …`** in the fetch step. The upstream replaced a release in place. Do not update
-the pin to make it pass — find out why the bytes changed first.
+**`!! upstream outage: …` and exit code 8** in the fetch step. GitHub or another upstream answered
+5xx, 429, timed out, or could not be reached, and kept doing so for five attempts over about 75
+seconds. Nothing about the package was found wrong. Rerun the job once
+[githubstatus.com](https://www.githubstatus.com) is green. The same message comes from
+`check-updates.sh`, `land-updates.sh` and the intake job, all through `tools/net.sh`. Before this
+change the symptom was `curl: (22) The requested URL returned error: 500` repeated six times and
+`exit code 22` — also an outage, also a rerun.
+
+**`curl: (22) … 404` and exit code 7** in the fetch step. The asset is not in the release: the tag
+or the file name in `upstream.sh` is wrong, or upstream deleted it. A rerun gets the same answer.
+
+**`sha256 … pinned …`** in the fetch step, exit code 7. The upstream replaced a release in place. Do
+not update the pin to make it pass — find out why the bytes changed first.
 
 **`NO ORIGIN …`** from `tools/check-origin.sh`, after the index is built. A package reached the tree
 without saying where it comes from, and this feed does not publish it. Nothing here fixes that: the
@@ -145,8 +156,8 @@ somewhere a user can go.
 
 **`tools` failed.** A self-test of a script under `tools/` is red, and `check` did not start. The log
 prints `FAIL` beside the broken case. Run the tests locally before you push a change to `tools/`:
-`sh tools/test-sources.sh`, `sh tools/test-land-updates.sh`, `sh tools/test-check-updates.sh`. They
-need `git` and `jq` and reach no network.
+`sh tools/test-sources.sh`, `sh tools/test-land-updates.sh`, `sh tools/test-check-updates.sh`,
+`sh tools/test-net.sh`. They need `git` and `jq` and reach no network.
 
 ---
 

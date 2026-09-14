@@ -48,6 +48,12 @@ set -eu
 # can guess a different repository than the one this checkout came from.
 SELF="${GITHUB_REPOSITORY:-$(gh repo view --json nameWithOwner -q .nameWithOwner)}"
 
+# Every read from an upstream release goes through tools/net.sh: it retries an outage
+# and exits 8 when one outlasts it, so "GitHub answered 502" never reads as "this
+# release is broken". Resolved beside this file, not from the working directory,
+# because the tests run this script from inside a repository with no tools/ in it.
+NET="$(cd "$(dirname "$0")" && pwd)/net.sh"
+
 # may_automerge <upstream.sh> <current version> <latest version> <package name>
 #
 # A signature says the author published these bytes. It does not say the release is
@@ -196,6 +202,7 @@ BASE="$(git rev-parse --abbrev-ref HEAD)"
 # Packages whose check stopped, reported together once the loop is done. See the end
 # of the loop for why one of them must not end it.
 failed=""
+outages=""
 
 for up in packages/*/upstream.sh; do
 	dir="$(dirname "$up")"
@@ -244,18 +251,31 @@ for up in packages/*/upstream.sh; do
 		# fails, the release list; a renamed or deleted upstream is a REPO to fix,
 		# not a quiet hour. Every other failure stops this package through the
 		# handler after the subshell.
-		if ! latest_tag="$(gh release view --repo "$REPO" --json tagName -q .tagName 2>"$tmp/view.err")"; then
-			if [ "$(cat "$tmp/view.err")" = "release not found" ] &&
-				gh api "repos/$REPO/releases?per_page=1" -q length >/dev/null 2>"$tmp/list.err"; then
-				echo "$name: upstream has no releases"
-				exit 0
+		#
+		# tools/net.sh passes gh's stderr through verbatim when the answer is definite,
+		# so the `release not found` comparison still sees exactly what gh printed.
+		rc=0
+		latest_tag="$("$NET" gh release view --repo "$REPO" --json tagName -q .tagName 2>"$tmp/view.err")" || rc=$?
+		if [ "$rc" -ne 0 ]; then
+			if [ "$rc" -ne 8 ] && [ "$(cat "$tmp/view.err")" = "release not found" ]; then
+				rc=0
+				"$NET" gh api "repos/$REPO/releases?per_page=1" -q length >/dev/null 2>"$tmp/list.err" || rc=$?
+				if [ "$rc" -eq 0 ]; then
+					echo "$name: upstream has no releases"
+					exit 0
+				fi
 			fi
 			{
 				echo "$name: could not read the latest release of $REPO"
 				cat "$tmp/view.err" "$tmp/list.err" 2>/dev/null | sed 's/^/  /'
 				echo "  failed: gh release view --repo $REPO --json tagName, then gh api repos/$REPO/releases"
-				echo "  a renamed or deleted repository needs REPO fixed in $up; an outage clears on a later run"
+				if [ "$rc" -eq 8 ]; then
+					echo "  GitHub did not answer after retries: an outage, not a finding; a later run checks it again"
+				else
+					echo "  a renamed or deleted repository needs REPO fixed in $up"
+				fi
 			} >&2
+			[ "$rc" -ne 8 ] || exit 8
 			exit 1
 		fi
 		[ -n "$latest_tag" ] || { echo "$name: gh release view answered an empty tag for $REPO" >&2; exit 1; }
@@ -326,7 +346,7 @@ for up in packages/*/upstream.sh; do
 		# none of them would be pure waste.
 		pattern='*'
 		[ "$KIND" = "manifest" ] && pattern='manifest.txt'
-		gh release download "$latest_tag" --repo "$REPO" --dir "$tmp" --pattern "$pattern" >/dev/null
+		"$NET" gh release download "$latest_tag" --repo "$REPO" --dir "$tmp" --pattern "$pattern" >/dev/null
 
 		# Recompute the pins from the bytes the release actually served, rewriting
 		# values in place. Nothing but data changes, so the diff is readable.
@@ -518,13 +538,28 @@ can be merged.")"; then
 		# both back: the branch and every tracked file.
 		echo "$name: stopped; the remaining packages are still checked" >&2
 		git checkout -q -f "$BASE"
-		failed="$failed $name"
+		# Exit 8 is tools/net.sh saying GitHub did not answer. Kept apart so the end
+		# of the run can say which of the two it was.
+		if [ "$stopped" -eq 8 ]; then
+			outages="$outages $name"
+		else
+			failed="$failed $name"
+		fi
 	fi
 done
 
 # Still red when anything stopped. Continuing past a failure is about checking the
 # rest, not about hiding this one: a check that could not run counts as failed.
+#
+# Exit 8 only when an outage is the whole story. One real failure beside it makes the
+# run a 1, because exit 8 tells whoever reads it that a rerun is all it needs.
 if [ -n "$failed" ]; then
 	echo "check stopped for:$failed" >&2
+	[ -z "$outages" ] || echo "and GitHub did not answer for:$outages" >&2
 	exit 1
+fi
+if [ -n "$outages" ]; then
+	echo "check stopped because GitHub did not answer for:$outages" >&2
+	echo "  an upstream outage, not a finding; the next scheduled run checks them again" >&2
+	exit 8
 fi

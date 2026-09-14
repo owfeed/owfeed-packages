@@ -40,13 +40,23 @@ jobs:
         run: |
           set -eu
           printf '%s' "$BODY" > "$RUNNER_TEMP/body.md"
-          ./tools/intake-check.sh "$RUNNER_TEMP/body.md" > "$RUNNER_TEMP/verdict.md" || {
+          rc=0
+          ./tools/intake-check.sh "$RUNNER_TEMP/body.md" > "$RUNNER_TEMP/verdict.md" || rc=$?
+          # 8 is an upstream outage (tools/net.sh): nothing was decided, and the
+          # requester has nothing to fix. Anything else non-zero is a bug here.
+          if [ "$rc" -eq 8 ]; then
+            {
+              echo "## Automated intake check"
+              echo
+              echo "GitHub or the manifest's host did not answer while this ran, so nothing was checked yet. You do not need to change anything; editing the issue or a maintainer's rerun checks it again."
+            } > "$RUNNER_TEMP/verdict.md"
+          elif [ "$rc" -ne 0 ]; then
             {
               echo "## Automated intake check"
               echo
               echo "The check itself failed to run. That is a bug here, not in your request."
             } > "$RUNNER_TEMP/verdict.md"
-          }
+          fi
           cat "$RUNNER_TEMP/verdict.md"
           gh issue comment "${{ github.event.issue.number }}" \
             --repo "${{ github.repository }}" \

@@ -132,6 +132,7 @@ case "${1:-} ${2:-}" in
 	done
 	if [ -f "$GH_STATE/pr-list-fails" ] &&
 		{ [ ! -s "$GH_STATE/pr-list-fails" ] || [ "$(cat "$GH_STATE/pr-list-fails")" = "$head" ]; }; then
+		echo "$head" >>"$GH_STATE/pr-list-calls"
 		echo "HTTP 502: Bad Gateway" >&2
 		exit 1
 	fi
@@ -166,8 +167,15 @@ listing() { git ls-remote --heads origin 'update/*' | tr '\t' ' ' >"$GH_STATE/re
 status=0
 run() {
 	status=0
-	PATH="$work/bin:$PATH" GITHUB_REPOSITORY="owfeed/test" sh "$script" >"$1" 2>&1 || status=$?
+	# NET_RETRY_DELAY=0: tools/net.sh still makes every attempt, without the sleeps.
+	PATH="$work/bin:$PATH" GITHUB_REPOSITORY="owfeed/test" NET_RETRY_DELAY=0 \
+		sh "$script" >"$1" 2>&1 || status=$?
 	sed 's/^/     | /' "$1"
+}
+
+# exited <code> <why> -- 8 is an outage and 1 a failed step; a reader reruns only the 8.
+exited() {
+	if [ "$status" = "$1" ]; then ok "exit $1: $2"; else no "exited $status, expected $1: $2"; fi
 }
 
 # The run's colour, both ways. Only a step that could not run is red; every ordinary
@@ -303,6 +311,12 @@ red "gh pr list failed"
 kept update/gamma-1.2.0
 unmoved
 logged "$work/out3" "update/gamma-1.2.0: could not read its pull requests"
+# A 502 is an outage: asked again before giving up, and reported as one.
+exited 8 "every failure was GitHub answering 502"
+logged "$work/out3" "not landed because GitHub did not answer:"
+calls="$(grep -c '^update/gamma-1.2.0$' "$GH_STATE/pr-list-calls" 2>/dev/null || true)"
+if [ "$calls" = 5 ]; then ok "gh pr list was asked 5 times for gamma"
+else no "gh pr list was asked ${calls:-0} time(s) for gamma; tools/net.sh makes 5 attempts"; fi
 
 echo "--- fourth run: git diff --name-only fails"
 offer
@@ -311,6 +325,7 @@ listing
 run "$work/out4"
 rm -f "$GH_STATE/git-fails"
 red "git diff failed"
+exited 1 "a failed git step is not an outage"
 kept update/gamma-1.2.0
 kept update/delta-3.0.0
 unmoved
@@ -339,7 +354,7 @@ run "$work/out6"
 rm -f "$GH_STATE/pr-list-fails"
 red "one branch could not be read"
 logged "$work/out6" "update/delta-3.0.0: could not read its pull requests"
-logged "$work/out6" "not landed because a step failed: update/delta-3.0.0"
+logged "$work/out6" "not landed because GitHub did not answer: update/delta-3.0.0"
 head="$(git ls-remote origin refs/heads/main | cut -f1)"
 if [ "$head" = "$gamma2" ]; then
 	ok "the branch after the failure was still read, and landed"

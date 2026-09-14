@@ -14,8 +14,10 @@
 #   a0-unfetchable upstream names a latest release, and downloading it fails
 #                  -> this package stops, every package after it is still checked,
 #                     and the run is red naming it
-#   b0-outage      asking for the latest release fails with an HTTP error
-#                  -> stops like a0-unfetchable; never read as "no releases"
+#   b0-outage      asking for the latest release fails with an HTTP 502
+#                  -> asked 5 times (tools/net.sh), then stops as an outage; never read
+#                     as "no releases". The run exits 8 when nothing else failed
+#                     (fifth run), 1 when something did
 #   b1-missing     `release not found`, and the repository itself is gone
 #                  -> stops: a REPO to fix, not an upstream with nothing released
 #   f-norelease    `release not found` from a repository that exists
@@ -75,7 +77,7 @@ mkdir -p "$bin"
 
 GH_STATE="$work/state"
 export GH_STATE
-mkdir -p "$GH_STATE/releases" "$GH_STATE/broken" "$GH_STATE/outage" "$GH_STATE/missing"
+mkdir -p "$GH_STATE/releases" "$GH_STATE/broken" "$GH_STATE/outage" "$GH_STATE/missing" "$GH_STATE/download-outage"
 : > "$GH_STATE/downloads"
 
 # Stand-in for gh(1). It answers the four calls the script makes and fails on
@@ -97,6 +99,7 @@ case "$what" in
 	# error names itself; no releases and no repository both say exactly
 	# `release not found`.
 	s="$(slug "$2")"
+	printf '%s\n' "$2" >>"$GH_STATE/views"
 	if [ -f "$GH_STATE/outage/$s" ]; then
 		echo "HTTP 502: Bad Gateway (https://api.github.com/repos/$2/releases/latest)" >&2
 		exit 1
@@ -119,6 +122,10 @@ case "$what" in
 "release download")
 	# gh release download <tag> --repo <repo> --dir <dir> --pattern <pattern>
 	printf '%s\n' "$1" >>"$GH_STATE/downloads"
+	if [ -f "$GH_STATE/download-outage/$(slug "$3")" ]; then
+		echo "HTTP 503: Service Unavailable (https://api.github.com/repos/$3/releases/tags/$1)" >&2
+		exit 1
+	fi
 	f="$GH_STATE/releases/$(slug "$3")"
 	if [ -f "$GH_STATE/broken/$(slug "$3")" ] || [ ! -f "$f" ] || [ "$(cat "$f")" != "$1" ]; then
 		echo "release not found" >&2
@@ -223,8 +230,22 @@ git checkout -q main
 status=0
 run() {
 	status=0
-	PATH="$bin:$PATH" GITHUB_REPOSITORY="owfeed/test" sh "$script" >"$1" 2>&1 || status=$?
+	# NET_RETRY_DELAY=0: tools/net.sh still makes every attempt, without the sleeps.
+	PATH="$bin:$PATH" GITHUB_REPOSITORY="owfeed/test" NET_RETRY_DELAY=0 \
+		sh "$script" >"$1" 2>&1 || status=$?
 	sed 's/^/     | /' "$1"
+}
+
+# exited <code> <why> -- 8 is an outage and 1 a failed check; a reader reruns only the 8.
+exited() {
+	if [ "$status" = "$1" ]; then ok "exit $1: $2"; else no "exited $status, expected $1: $2"; fi
+}
+
+# views <repo> <count> -- how many times the latest release of <repo> was asked for
+views() {
+	got="$(grep -cxF "$1" "$GH_STATE/views" 2>/dev/null || true)"
+	if [ "$got" = "$2" ]; then ok "asked for the latest release of $1 $2 time(s)"
+	else no "asked for the latest release of $1 ${got:-0} time(s), expected $2"; fi
 }
 
 # said <file> <text>
@@ -263,12 +284,18 @@ run "$work/out"
 # a scheduled job reporting that nothing was released when it never asked.
 if [ "$status" -ne 0 ]; then ok "the run is red"; else no "the run went green with a package it could not check"; fi
 said "$work/out" "a0-unfetchable: stopped; the remaining packages are still checked"
-said "$work/out" "check stopped for: a0-unfetchable b0-outage b1-missing"
+said "$work/out" "check stopped for: a0-unfetchable b1-missing"
+said "$work/out" "and GitHub did not answer for: b0-outage"
+exited 1 "a0-unfetchable and b1-missing are failures, whatever else was an outage"
 
 # Not being able to ask is not an answer. Both failures stop their package, and the
 # one repository that exists and has released nothing is still the green case.
 said "$work/out" "b0-outage: could not read the latest release of example/b0-outage"
 said "$work/out" "HTTP 502: Bad Gateway"
+said "$work/out" "GitHub did not answer after retries: an outage, not a finding"
+# The 502 is asked again; `release not found` from a missing repository is not.
+views example/b0-outage 5
+views example/b1-missing 1
 unsaid "$work/out" "b0-outage: upstream has no releases"
 said "$work/out" "b1-missing: could not read the latest release of example/b1-missing"
 unsaid "$work/out" "b1-missing: upstream has no releases"
@@ -375,6 +402,26 @@ run "$work/out4"
 rm -f "$GH_STATE/git-fails"
 said "$work/out4" "c-noprefix: https://example.invalid/pull/1"
 unsaid "$work/out4" "c-noprefix: update/c-noprefix-2026.09 pushed, no pull request"
+
+# An outage and nothing else: the run says so and exits 8, the code a reader may rerun.
+# a0-unfetchable's download now answers 503 instead of `release not found`, and the
+# missing repository is back with nothing released.
+echo "--- fifth run: GitHub answers 5xx and nothing else is wrong"
+rm -f "$GH_STATE/broken/example_a0-unfetchable" "$GH_STATE/missing/example_b1-missing"
+: >"$GH_STATE/download-outage/example_a0-unfetchable"
+: >"$GH_STATE/downloads"
+run "$work/out5"
+exited 8 "only GitHub failed"
+said "$work/out5" "check stopped because GitHub did not answer for: a0-unfetchable b0-outage"
+unsaid "$work/out5" "check stopped for:"
+got="$(grep -cxF v1.0.1 "$GH_STATE/downloads" || true)"
+if [ "$got" = 5 ]; then ok "the 503 download was attempted 5 times"
+else no "the 503 download was attempted ${got:-0} time(s), expected 5"; fi
+if [ -z "$(git ls-remote --heads origin 'update/a0-unfetchable-*')" ]; then
+	ok "a0-unfetchable pushed nothing during the outage"
+else
+	no "a0-unfetchable pushed a branch for a release it could not download"
+fi
 
 if [ "$result" = 0 ]; then
 	echo "PASS"

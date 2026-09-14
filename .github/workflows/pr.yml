@@ -96,7 +96,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Self-test the scripts under tools/
-        run: sh tools/test-sources.sh && sh tools/test-land-updates.sh && sh tools/test-check-updates.sh
+        run: sh tools/test-sources.sh && sh tools/test-land-updates.sh && sh tools/test-check-updates.sh && sh tools/test-net.sh
 
   check:
     needs: tools
