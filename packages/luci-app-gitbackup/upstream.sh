@@ -1,5 +1,5 @@
-# gitbackup — commits an OpenWrt router's configuration into a Git repository on a
-# schedule, with the LuCI interface and the translation catalogue that go with it.
+# gitbackup — a backend package, its LuCI application and the translation catalogue
+# that goes with it.
 #
 # Data only. tools/fetch.sh does the work; tools/check-updates.sh rewrites the
 # version here and touches nothing else.

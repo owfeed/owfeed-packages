@@ -1,4 +1,4 @@
-# podkop-updater — watches podkop releases, drives update and rollback from Telegram.
+# podkop-updater — a service package, built and signed upstream.
 #
 # Data only. tools/fetch.sh does the work.
 

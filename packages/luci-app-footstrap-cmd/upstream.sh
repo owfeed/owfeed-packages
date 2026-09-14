@@ -1,5 +1,5 @@
-# luci-app-footstrap-cmd — a `:` command line and section search for luci-theme-footstrap,
-# and the translation catalogue that goes with it.
+# luci-app-footstrap-cmd — a LuCI plugin package for luci-theme-footstrap, and the
+# translation catalogue that goes with it.
 #
 # Data only. tools/fetch.sh does the work; tools/check-updates.sh rewrites the
 # version here and touches nothing else.

@@ -1,5 +1,4 @@
-# luci-app-podkop-bot — LuCI web interface for installation, configuration and diagnostics
-# of the podkop_bot Telegram management service for Podkop and compatible forks on OpenWrt.
+# luci-app-podkop-bot — a LuCI application package.
 #
 # Upstream publishes both OpenWrt package formats together with a signed owfeed manifest.
 # The feed therefore verifies the manifest first and ingests the exact release assets.
