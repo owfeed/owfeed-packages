@@ -240,11 +240,22 @@ for up in packages/*/upstream.sh; do
 		# stuck until somebody deleted the branch; rebuilding it is how this
 		# converges with nobody looking.
 		#
-		# The version is the identity here, not the checksums: the branch name
-		# carries it and the pins are derived from the release that tag names. An
-		# upstream that replaces a release in place is caught where the bytes are
-		# read -- `tools/fetch.sh` compares them against the pin -- rather than by
-		# downloading ninety assets on every run to compare them with themselves.
+		# The version and the tag are the identity here, not the checksums: the
+		# branch name carries the version and the pins are derived from the release
+		# that tag names. An upstream that replaces a release in place is caught where
+		# the bytes are read -- `tools/fetch.sh` compares them against the pin --
+		# rather than by downloading ninety assets on every run to compare them with
+		# themselves.
+		#
+		# The tag has to match as well as the version, because two tags can share
+		# one version: `v1.1.0` and `1.1.0` both strip to 1.1.0 and both become
+		# `update/<name>-1.1.0`. A branch pinned to the tag upstream did not publish
+		# -- left by the code that pasted a `v` onto every tag, or by an upstream that
+		# re-tagged -- compared by VERSION alone read as this update already done,
+		# and on every run after that the job reported it current while the branch
+		# could only ever fail to fetch. Exact lines, not substrings: `TAG="1.1.0"`
+		# must not be found inside some other assignment. A branch that pins no TAG
+		# at all predates this script writing one, and is rebuilt once.
 		#
 		# A failing `git ls-remote` reads as "no branch" and costs a rebuild, not
 		# a wrong merge: the push below is `--force-with-lease` and refuses if the
@@ -253,16 +264,16 @@ for up in packages/*/upstream.sh; do
 		if [ -n "$remote_sha" ]; then
 			git fetch -q origin "+refs/heads/$branch:refs/remotes/origin/$branch"
 			have="$(git show "refs/remotes/origin/$branch:$up" 2>/dev/null || true)"
-			want="VERSION=\"$(feed_version "$latest")\""
-			case "$have" in
-			*"$want"*)
-				if git merge-base --is-ancestor HEAD "refs/remotes/origin/$branch"; then
+			if printf '%s\n' "$have" | grep -qxF "VERSION=\"$(feed_version "$latest")\""; then
+				if ! printf '%s\n' "$have" | grep -qxF "TAG=\"$latest_tag\""; then
+					echo "$name: $branch carries $latest pinned to a tag other than $latest_tag: rebuilding it"
+				elif git merge-base --is-ancestor HEAD "refs/remotes/origin/$branch"; then
 					echo "$name: $branch already carries $latest"
 					exit 0
+				else
+					echo "$name: $branch carries $latest but predates main: rebuilding it"
 				fi
-				echo "$name: $branch carries $latest but predates main: rebuilding it"
-				;;
-			esac
+			fi
 		fi
 		echo "$name: $current -> $latest"
 
