@@ -7,13 +7,19 @@
 # repository under $TMPDIR. No release is ever downloaded for real; the stub records
 # which tag was asked for, which is most of what these cases are about.
 #
-# WHAT IT PINS. Six pins the scheduled job meets, and where each has to land:
+# WHAT IT PINS. Nine pins the scheduled job meets, and where each has to land:
 #
 #   a-handmapped   tag 0.19.17-2, VERSION 0.19.17-r2, upstream now 0.19.17-3
 #                  -> updated: upstream's -3 becomes the feed's -r3, the tag verbatim
 #   a0-unfetchable upstream names a latest release, and downloading it fails
 #                  -> this package stops, every package after it is still checked,
 #                     and the run is red naming it
+#   b0-outage      asking for the latest release fails with an HTTP error
+#                  -> stops like a0-unfetchable; never read as "no releases"
+#   b1-missing     `release not found`, and the repository itself is gone
+#                  -> stops: a REPO to fix, not an upstream with nothing released
+#   f-norelease    `release not found` from a repository that exists
+#                  -> "upstream has no releases", green
 #   b-current      tag 0.19.17-2, VERSION 0.19.17-r2, upstream still 0.19.17-2
 #                  -> current; the run must not propose what is already pinned
 #   c-noprefix     tag 2026.07 -> 2026.08, no `v` anywhere
@@ -69,7 +75,7 @@ mkdir -p "$bin"
 
 GH_STATE="$work/state"
 export GH_STATE
-mkdir -p "$GH_STATE/releases" "$GH_STATE/broken"
+mkdir -p "$GH_STATE/releases" "$GH_STATE/broken" "$GH_STATE/outage" "$GH_STATE/missing"
 : > "$GH_STATE/downloads"
 
 # Stand-in for gh(1). It answers the four calls the script makes and fails on
@@ -86,9 +92,29 @@ shift 2
 case "$what" in
 "release view")
 	# gh release view --repo <repo> --json tagName -q .tagName
-	f="$GH_STATE/releases/$(slug "$2")"
+	#
+	# The three shapes a failure takes, as measured against gh 2.99.0: an HTTP
+	# error names itself; no releases and no repository both say exactly
+	# `release not found`.
+	s="$(slug "$2")"
+	if [ -f "$GH_STATE/outage/$s" ]; then
+		echo "HTTP 502: Bad Gateway (https://api.github.com/repos/$2/releases/latest)" >&2
+		exit 1
+	fi
+	f="$GH_STATE/releases/$s"
 	[ -f "$f" ] || { echo "release not found" >&2; exit 1; }
 	cat "$f"
+	;;
+"api repos/"*"/releases?per_page=1")
+	# gh api repos/<repo>/releases?per_page=1 -q length -- a missing repository
+	# is a 404 here, an existing one with no releases answers 0.
+	r="${what#api repos/}"
+	r="${r%/releases*}"
+	if [ -f "$GH_STATE/missing/$(slug "$r")" ]; then
+		echo "gh: Not Found (HTTP 404)" >&2
+		exit 1
+	fi
+	if [ -f "$GH_STATE/releases/$(slug "$r")" ]; then echo 1; else echo 0; fi
 	;;
 "release download")
 	# gh release download <tag> --repo <repo> --dir <dir> --pattern <pattern>
@@ -167,6 +193,9 @@ pin b-current      0.19.17-r2 0.19.17-2
 pin c-noprefix     2026.07-r1 2026.07
 pin d-vprefix      1.0.0-r1   v1.0.0
 pin e-retag        1.0.0-r1   v1.0.0
+pin b0-outage      1.0.0-r1   v1.0.0
+pin b1-missing     1.0.0-r1   v1.0.0
+pin f-norelease    1.0.0-r1   v1.0.0
 git add -A && git commit -q -m "packages: initial pins"
 git push -q origin main
 
@@ -177,6 +206,10 @@ release example/b-current      0.19.17-2
 release example/c-noprefix     2026.08
 release example/d-vprefix      v1.1.0
 release example/e-retag        1.1.0
+release example/b0-outage      v1.0.1
+: > "$GH_STATE/outage/example_b0-outage"
+: > "$GH_STATE/missing/example_b1-missing"
+# f-norelease: no release at all, and the repository is there.
 
 # The branch the guessing code would have left behind for e-retag: the right version
 # in its name, the wrong tag in its pin. Its content is what decides whether the next
@@ -230,7 +263,17 @@ run "$work/out"
 # a scheduled job reporting that nothing was released when it never asked.
 if [ "$status" -ne 0 ]; then ok "the run is red"; else no "the run went green with a package it could not check"; fi
 said "$work/out" "a0-unfetchable: stopped; the remaining packages are still checked"
-said "$work/out" "check stopped for: a0-unfetchable"
+said "$work/out" "check stopped for: a0-unfetchable b0-outage b1-missing"
+
+# Not being able to ask is not an answer. Both failures stop their package, and the
+# one repository that exists and has released nothing is still the green case.
+said "$work/out" "b0-outage: could not read the latest release of example/b0-outage"
+said "$work/out" "HTTP 502: Bad Gateway"
+unsaid "$work/out" "b0-outage: upstream has no releases"
+said "$work/out" "b1-missing: could not read the latest release of example/b1-missing"
+unsaid "$work/out" "b1-missing: upstream has no releases"
+said "$work/out" "f-norelease: upstream has no releases"
+unsaid "$work/out" "f-norelease: stopped"
 if [ -z "$(git ls-remote --heads origin 'update/a0-unfetchable-*')" ]; then
 	ok "a0-unfetchable pushed nothing"
 else
@@ -301,6 +344,37 @@ else no "the second run downloaded $((after - before)) release(s); only a0-unfet
 # And it is still red, because the release it cannot fetch is still there. A failure
 # that goes green on the next run is a failure nobody ever sees.
 if [ "$status" -ne 0 ]; then ok "the second run is red too"; else no "the failure stopped being reported"; fi
+
+# `may_automerge` runs as an `if` condition, where POSIX switches errexit off. A git
+# call inside it that fails hands the next line an empty answer, and both empty
+# answers there mean "yes": no recent updates (under the daily ceiling), no diff
+# outside the pins. A failed read has to be a pull request instead.
+realgit="$(command -v git)"
+cat >"$bin/git" <<SHIM
+#!/bin/sh
+if [ -f "\$GH_STATE/git-fails" ] && [ "\${1:-}" = "\$(cat "\$GH_STATE/git-fails")" ]; then
+	echo "fatal: stub git refused: git \$*" >&2
+	exit 128
+fi
+exec "$realgit" "\$@"
+SHIM
+chmod +x "$bin/git"
+
+echo "--- third run: git log fails while counting recent updates"
+release example/d-vprefix v1.2.0
+echo log >"$GH_STATE/git-fails"
+run "$work/out3"
+rm -f "$GH_STATE/git-fails"
+said "$work/out3" "d-vprefix: https://example.invalid/pull/1"
+unsaid "$work/out3" "d-vprefix: update/d-vprefix-1.2.0 pushed, no pull request"
+
+echo "--- fourth run: git diff fails while reading what moved"
+release example/c-noprefix 2026.09
+echo diff >"$GH_STATE/git-fails"
+run "$work/out4"
+rm -f "$GH_STATE/git-fails"
+said "$work/out4" "c-noprefix: https://example.invalid/pull/1"
+unsaid "$work/out4" "c-noprefix: update/c-noprefix-2026.09 pushed, no pull request"
 
 if [ "$result" = 0 ]; then
 	echo "PASS"

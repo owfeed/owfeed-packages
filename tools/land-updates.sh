@@ -100,7 +100,14 @@ superseded() {
 
 	_base="$(git merge-base "refs/remotes/origin/main" "$_sha" 2>/dev/null || true)"
 	[ -n "$_base" ] || return 0
-	_own="$(git diff --name-only "$_base..$_sha")"
+	# Checked by hand, because errexit is off in here: this runs inside `if` and
+	# inside `land || echo`. A failed diff prints nothing, and nothing is the answer
+	# one line down that deletes the branch. Said on stderr so stdout stays empty,
+	# which the caller reads as "keep".
+	if ! _own="$(git diff --name-only "$_base..$_sha")"; then
+		echo "cannot tell what $_sha changes: 'git diff --name-only $_base..$_sha' failed; keeping it" >&2
+		return 0
+	fi
 	[ -n "$_own" ] || { echo "it adds nothing on top of where it left main"; return 0; }
 
 	# One `git diff` per path, not one call with the whole list: an unquoted list
@@ -136,10 +143,11 @@ superseded() {
 	echo "it proposes $_theirs, behind the $_ours main publishes"
 }
 
-# Land one branch, or say why not and return. Never fails the run: one branch that
-# cannot land must not stop the next one, and none of the reasons below is an error
-# in the first place -- a check still running, a `main` that moved, a human's branch
-# that is none of this script's business.
+# Land one branch, or say why not and return. Returns 0 for every ordinary reason not
+# to land -- a check still running, a `main` that moved, a pull request waiting for a
+# person, a branch already spent -- because none of those is an error. Returns 1 only
+# when a step could not run; the loop at the bottom carries on to the next branch and
+# makes the run red at the end.
 land() {
 	branch="$1"
 	sha="$2"
@@ -152,7 +160,18 @@ land() {
 	# Captured, never piped into a test: a pipeline reports its last command, so a
 	# failing `gh pr list` reaching `grep` reads as "no pull request is open" --
 	# the one answer that makes this script push.
-	pr="$(gh pr list -R "$SELF" --head "$branch" --state open --json number -q '.[0].number')"
+	#
+	# And its status checked right here, because capturing is not enough on its
+	# own. `land` is the left side of `|| echo` below, and POSIX turns errexit off
+	# for every command in it: a failed call left `pr` empty and the function
+	# carried on to push a branch whose pull request was waiting for a person.
+	# Reproduced with a stub `gh` that exits 1 -- tools/test-land-updates.sh.
+	if ! pr="$(gh pr list -R "$SELF" --head "$branch" --state open --json number -q '.[0].number')"; then
+		echo "$branch: could not read its pull requests, so it is not landed this run"
+		echo "  failed: gh pr list -R $SELF --head $branch --state open"
+		echo "  a branch waiting for a person looks like any other until this answers; the next run asks again"
+		return 1
+	fi
 	if [ -n "$pr" ]; then
 		echo "$branch: pull request #$pr is open; a person merges that one"
 		return 0
@@ -175,8 +194,15 @@ land() {
 	# What the required contexts say about THIS commit. Check runs bind to a
 	# commit rather than to an event, so the run `check-updates.sh` dispatched on
 	# the branch reports against the same sha that is about to be pushed.
-	checks="$(gh api "repos/$SELF/commits/$sha/check-runs?per_page=100" \
-		-q '.check_runs[] | "\(.status)/\(.conclusion // "pending")\t\(.name)"')"
+	# A failed read already falls the safe way -- no runs seen is "no run" -- but it
+	# would say so as "not green yet", which sends whoever reads the log to the
+	# checks instead of to the API call that failed.
+	if ! checks="$(gh api "repos/$SELF/commits/$sha/check-runs?per_page=100" \
+		-q '.check_runs[] | "\(.status)/\(.conclusion // "pending")\t\(.name)"')"; then
+		echo "$branch: could not read its check runs, so it is not landed this run"
+		echo "  failed: gh api repos/$SELF/commits/$sha/check-runs"
+		return 1
+	fi
 
 	# Every run of a required name has to be completed and successful, not just
 	# the newest one. A cancelled run stays on the commit and GitHub has been
@@ -210,8 +236,21 @@ land() {
 	# `main` is read per branch, not once per run: an earlier branch in this same
 	# loop may already have landed, and the fast-forward test below has to be
 	# against where `main` is now rather than where it was when the job started.
-	git fetch -q origin "+refs/heads/main:refs/remotes/origin/main"
-	git fetch -q origin "+refs/heads/$branch:refs/remotes/origin/$branch"
+	#
+	# Each fetch checked by hand (errexit is off in here, see `gh pr list` above). A
+	# failed fetch leaves the refs where the last one put them, and every test below
+	# -- the branch did not move, `main` is its ancestor, the paths it adds -- would
+	# then be answered about a repository that may no longer exist.
+	if ! git fetch -q origin "+refs/heads/main:refs/remotes/origin/main"; then
+		echo "$branch: could not fetch main, so it is not landed this run"
+		echo "  failed: git fetch origin +refs/heads/main:refs/remotes/origin/main"
+		return 1
+	fi
+	if ! git fetch -q origin "+refs/heads/$branch:refs/remotes/origin/$branch"; then
+		echo "$branch: could not fetch the branch, so it is not landed this run"
+		echo "  failed: git fetch origin +refs/heads/$branch:refs/remotes/origin/$branch"
+		return 1
+	fi
 	head="$(git rev-parse "refs/remotes/origin/$branch")"
 	if [ "$head" != "$sha" ]; then
 		# The branch moved between the listing and the fetch. The green contexts
@@ -256,7 +295,11 @@ land() {
 	# deletes the branch. Kept as a guard rather than as a branch of logic: an
 	# empty `files` would make the pattern check below vacuously true, and "no
 	# paths to object to" must never read as "allowed".
-	files="$(git diff --name-only "refs/remotes/origin/main..$sha")"
+	if ! files="$(git diff --name-only "refs/remotes/origin/main..$sha")"; then
+		echo "$branch: could not list the paths it changes, so it is not landed this run"
+		echo "  failed: git diff --name-only refs/remotes/origin/main..$sha"
+		return 1
+	fi
 	if [ -z "$files" ]; then
 		echo "$branch: nothing to land against main"
 		return 0
@@ -296,12 +339,38 @@ if [ -z "$refs" ]; then
 	exit 0
 fi
 
-# `|| echo` on the call, not `set +e` around the loop: an unexpected failure inside
+# `if ! land` on the call, not `set +e` around the loop: an unexpected failure inside
 # `land` -- a `gh` outage, a git object that is not there -- must cost that one
 # branch and not every branch after it. Under plain `set -eu` the first one would
 # take the job down with the rest unread, which is the failure mode this repository
 # keeps re-learning (see the `checkout -` note in check-updates.sh).
-printf '%s\n' "$refs" | while read -r sha ref; do
+#
+# The price: POSIX turns errexit off for everything `land` runs when it is an `if`
+# condition, so nothing inside it stops on its own. Every step there whose failure
+# would read as a harmless answer checks its own status and returns 1 -- keep it
+# that way when adding one.
+#
+# A here-document rather than `printf | while`, so the loop runs in this shell and
+# `failed` survives it; a pipeline would run the loop in a subshell and lose it.
+# `land` reads nothing from stdin, and `</dev/null` keeps any `gh` or `git` in it
+# from swallowing the rest of the branch list.
+failed=""
+while read -r sha ref; do
 	branch="${ref#refs/heads/}"
-	land "$branch" "$sha" || echo "$branch: not landed this run (the step above failed)"
-done
+	if ! land "$branch" "$sha" </dev/null; then
+		echo "$branch: not landed this run (the step above failed)"
+		failed="$failed $branch"
+	fi
+done <<EOF
+$refs
+EOF
+
+# Red when a step failed, after every branch has been read -- the same shape as the
+# end of check-updates.sh. Green here used to mean "nothing failed" and "a `gh`
+# outage stopped every branch" alike, and a scheduled run nobody watches only gets
+# looked at when it is red.
+if [ -n "$failed" ]; then
+	echo "not landed because a step failed:$failed" >&2
+	echo "  every other branch was still read; the lines above name the command that failed" >&2
+	exit 1
+fi

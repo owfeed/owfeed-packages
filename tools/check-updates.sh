@@ -103,7 +103,17 @@ may_automerge() {
 	# Only this job's own commits count. Counting every commit that touched the file
 	# counts the one that added the package, and every hand edit to it since --
 	# which in a young repository is enough to refuse the first real update.
-	_recent="$(git log --since='24 hours ago' --author='owfeed-bot' --oneline -- "$_up" | wc -l | tr -d ' ')"
+	#
+	# Read first and counted second. This function runs as an `if` condition, where
+	# errexit is off, and in `git log | wc -l` a failed git still counts to 0 --
+	# under the ceiling, so a failure read as permission. Every failed read in here
+	# returns 1: the cost is a pull request, never an unreviewed merge.
+	if ! _log="$(git log --since='24 hours ago' --author='owfeed-bot' --oneline -- "$_up")"; then
+		echo "  could not count recent automatic updates: 'git log --since=\"24 hours ago\" --author=owfeed-bot -- $_up' failed"
+		return 1
+	fi
+	_recent=0
+	[ -z "$_log" ] || _recent="$(printf '%s\n' "$_log" | wc -l | tr -d ' ')"
 	if [ "$_recent" -ge 2 ]; then
 		echo "  $_recent automatic updates to $_name in the last day: the next one wants a person"
 		return 1
@@ -122,7 +132,15 @@ may_automerge() {
 	# changed line anywhere else means either a bug here or an upstream.sh that was
 	# edited between the checkout and now -- and SIG_KEY_ID moving would be the
 	# whole verification quietly relaxing itself.
-	_bad="$(git diff -U0 -- "$_up" \
+	#
+	# The diff is captured on its own for the same reason as the log above: piped
+	# straight into the filters, a failed `git diff` is an empty list of changed
+	# lines, and the `|| true` the filters need turns that into "only pins moved".
+	if ! _diff="$(git diff -U0 -- "$_up")"; then
+		echo "  could not read what changed: 'git diff -U0 -- $_up' failed, so it is not merging itself"
+		return 1
+	fi
+	_bad="$(printf '%s\n' "$_diff" \
 		| grep -E '^[+-][^+-]' \
 		| grep -vE '^[+-](VERSION|TAG|ARTIFACT|ARTIFACT_IPK|SHA256|SHA256_IPK)=' \
 		| grep -vE '^[+-][a-zA-Z0-9_.-]+ +[0-9a-f]{64} +' || true)"
@@ -207,15 +225,40 @@ for up in packages/*/upstream.sh; do
 		# fetch.sh's, so a package that pins no tag is still compared against
 		# exactly the tag fetch.sh would download for it.
 		current_tag="${TAG:-v${VERSION%-r*}}"
-		# `|| true` is load-bearing under `set -e`: an assignment takes the exit
-		# status of its command substitution, so a repository with no releases at
-		# all -- or a `gh` that could not reach GitHub -- would kill this subshell
-		# here, before the line below can say so. It used to survive that by
-		# accident: the old command ended in `| sed`, and a pipeline reports its
-		# last command.
-		latest_tag="$(gh release view --repo "$REPO" --json tagName -q .tagName 2>/dev/null || true)"
+		# Scratch space for this package, removed however the subshell ends. Made
+		# before the first `gh` call, whose stderr is read below.
+		tmp="$(mktemp -d)"
+		trap 'rm -rf "$tmp"' EXIT
 
-		[ -n "$latest_tag" ] || { echo "$name: upstream has no releases"; exit 0; }
+		# "Upstream has no releases" and "could not ask" are different answers, and
+		# only the first is green. This was `2>/dev/null || true`, which read a 401,
+		# a 502 or a dropped connection as "no releases" and left the run green with
+		# the package never checked -- a check that cannot run counts as failed.
+		#
+		# gh does not tell them apart by exit code. Measured with gh 2.99.0: a
+		# repository with no releases (octocat/Hello-World), a repository that does
+		# not exist, a bad token and an unreachable proxy all exit 1. The first two
+		# print exactly `release not found` -- both are a 404 on /releases/latest --
+		# and the others print the HTTP or transport error. So `release not found` is
+		# confirmed with a question an existing repository answers and a missing one
+		# fails, the release list; a renamed or deleted upstream is a REPO to fix,
+		# not a quiet hour. Every other failure stops this package through the
+		# handler after the subshell.
+		if ! latest_tag="$(gh release view --repo "$REPO" --json tagName -q .tagName 2>"$tmp/view.err")"; then
+			if [ "$(cat "$tmp/view.err")" = "release not found" ] &&
+				gh api "repos/$REPO/releases?per_page=1" -q length >/dev/null 2>"$tmp/list.err"; then
+				echo "$name: upstream has no releases"
+				exit 0
+			fi
+			{
+				echo "$name: could not read the latest release of $REPO"
+				cat "$tmp/view.err" "$tmp/list.err" 2>/dev/null | sed 's/^/  /'
+				echo "  failed: gh release view --repo $REPO --json tagName, then gh api repos/$REPO/releases"
+				echo "  a renamed or deleted repository needs REPO fixed in $up; an outage clears on a later run"
+			} >&2
+			exit 1
+		fi
+		[ -n "$latest_tag" ] || { echo "$name: gh release view answered an empty tag for $REPO" >&2; exit 1; }
 
 		# Versions, for what reads a version rather than a tag: the major-bump
 		# refusal, an `apk` shape's artifact names, and anyone reading the branch.
@@ -277,9 +320,6 @@ for up in packages/*/upstream.sh; do
 		fi
 		echo "$name: $current -> $latest"
 
-		tmp="$(mktemp -d)"
-		trap 'rm -rf "$tmp"' EXIT
-
 		# Only what this shape needs to recompute its pins. A manifest package pins
 		# no checksums at all -- they are in the manifest, under the author's
 		# signature -- so downloading its ninety-odd assets on every run to look at
@@ -314,8 +354,12 @@ for up in packages/*/upstream.sh; do
 		apk)
 			file="$(echo "$ARTIFACT" | sed "s/${current}/${latest}/g")"
 			[ -f "$tmp/$file" ] || { echo "$name: $latest_tag publishes no $file" >&2; exit 1; }
+			# The sum is taken into a variable before it goes near `sed`. Inside the
+			# sed argument a failed `sha256sum` is invisible -- the command's status
+			# is sed's -- and the pin is committed as an empty checksum.
+			sum="$(sha256sum "$tmp/$file")"
 			sed -i "s|^ARTIFACT=.*|ARTIFACT=\"${file}\"|" "$up"
-			sed -i "s|^SHA256=.*|SHA256=\"$(sha256sum "$tmp/$file" | cut -d' ' -f1)\"|" "$up"
+			sed -i "s|^SHA256=.*|SHA256=\"${sum%% *}\"|" "$up"
 
 			# The 24.10 container, when upstream ships one. Leaving it pinned to the
 			# previous version does not fail here -- it fails later, when fetch.sh asks
@@ -324,8 +368,9 @@ for up in packages/*/upstream.sh; do
 			if [ -n "${ARTIFACT_IPK:-}" ]; then
 				file_ipk="$(echo "$ARTIFACT_IPK" | sed "s/${current}/${latest}/g")"
 				[ -f "$tmp/$file_ipk" ] || { echo "$name: $latest_tag publishes no $file_ipk" >&2; exit 1; }
+				sum="$(sha256sum "$tmp/$file_ipk")"
 				sed -i "s|^ARTIFACT_IPK=.*|ARTIFACT_IPK=\"${file_ipk}\"|" "$up"
-				sed -i "s|^SHA256_IPK=.*|SHA256_IPK=\"$(sha256sum "$tmp/$file_ipk" | cut -d' ' -f1)\"|" "$up"
+				sed -i "s|^SHA256_IPK=.*|SHA256_IPK=\"${sum%% *}\"|" "$up"
 			fi
 			;;
 		binaries)
@@ -335,13 +380,24 @@ for up in packages/*/upstream.sh; do
 			echo "$ARTIFACTS" | while read -r artifact _ arches; do
 				[ -n "$artifact" ] || continue
 				[ -f "$tmp/$artifact" ] || { echo "$name: $latest_tag publishes no $artifact" >&2; exit 1; }
-				printf '%s  %s  %s\n' "$artifact" "$(sha256sum "$tmp/$artifact" | cut -d' ' -f1)" "$arches"
+				sum="$(sha256sum "$tmp/$artifact")"
+				printf '%s  %s  %s\n' "$artifact" "${sum%% *}" "$arches"
 			done > "$tmp/table"
+			# `|| exit 1`, not `&& mv`. The left side of `&&` is exempt from errexit,
+			# so a failing awk -- BSD awk refuses the newlines in this `-v` -- left
+			# the package running with VERSION and TAG already rewritten above and
+			# the old checksums still in place, and that half-pin was committed,
+			# pushed and sent to the checks.
 			awk -v table="$(cat "$tmp/table")" '
 				/^ARTIFACTS="/ { print; print table; inside = 1; next }
 				inside && /^"/ { print; inside = 0; next }
 				!inside        { print }
-			' "$up" > "$tmp/new" && mv "$tmp/new" "$up"
+			' "$up" > "$tmp/new" || {
+				echo "$name: could not rewrite the checksum table in $up; nothing is committed" >&2
+				echo "  failed: awk -v table=... $up (its own error is above)" >&2
+				exit 1
+			}
+			mv "$tmp/new" "$up"
 			;;
 		esac
 
