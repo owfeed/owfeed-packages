@@ -120,7 +120,12 @@ set -eu
 case "${1:-} ${2:-}" in
 "pr list")
 	# No pull request is open on any branch here. The human gate has its own
-	# reason to exist and is not what this test is about.
+	# reason to exist and is not what this test is about -- except that a call
+	# which FAILS must never read as "none is open", which the flag below pins.
+	if [ -f "$GH_STATE/pr-list-fails" ]; then
+		echo "HTTP 502: Bad Gateway" >&2
+		exit 1
+	fi
 	;;
 "api "*"/git/matching-refs/heads/update/")
 	cat "$GH_STATE/refs"
@@ -215,6 +220,91 @@ if [ "$lines" = 1 ] && grep -q '^update/delta-3.0.0: ' "$work/out2"; then
 	ok "the second run reports only the branch that is waiting for a rebuild"
 else
 	no "the second run reports $lines line(s); it should report delta and nothing else"
+fi
+
+# FAILURES THAT MUST NOT LAND OR DELETE. `land` runs as the left side of `|| echo`,
+# and POSIX switches errexit off for every command inside it, so a step that fails
+# carries on with an empty answer unless it checks its own status. Each empty answer
+# below is the one that does damage: no pull request (push past a person), nothing
+# changed (delete the branch), refs that were never refreshed (push on stale state).
+#
+# One green, landable branch throughout, re-pushed before each run so a case does not
+# depend on how the previous one ended. The last run lands it with nothing failing,
+# which is what makes "it was kept" mean the failure kept it.
+git checkout -q -b update/gamma-1.2.0 refs/remotes/origin/main
+pin gamma 1.2.0-r1
+save "gamma: 1.1.0 -> 1.2.0"
+gamma2="$(git rev-parse HEAD)"
+git checkout -q main
+offer() { git push -q origin "$gamma2:refs/heads/update/gamma-1.2.0"; }
+
+unmoved() {
+	head="$(git ls-remote origin refs/heads/main | cut -f1)"
+	if [ "$head" = "$gamma" ]; then
+		ok "main did not move"
+	else
+		no "main moved to $head; it had to stay at $gamma"
+	fi
+}
+
+# A git that refuses one kind of call, for the run that sets the flag. Only the
+# script under test sees it: run() is the one place $work/bin goes on PATH.
+realgit="$(command -v git)"
+cat >"$work/bin/git" <<SHIM
+#!/bin/sh
+if [ -f "\$GH_STATE/git-fails" ]; then
+	want="\$(cat "\$GH_STATE/git-fails")"
+	case " \$* " in
+	*" \$want "*)
+		echo "fatal: stub git refused: git \$*" >&2
+		exit 128
+		;;
+	esac
+fi
+exec "$realgit" "\$@"
+SHIM
+chmod +x "$work/bin/git"
+
+echo "--- third run: gh pr list fails"
+offer
+: >"$GH_STATE/pr-list-fails"
+listing
+run "$work/out3"
+rm -f "$GH_STATE/pr-list-fails"
+kept update/gamma-1.2.0
+unmoved
+logged "$work/out3" "update/gamma-1.2.0: could not read its pull requests"
+
+echo "--- fourth run: git diff --name-only fails"
+offer
+echo "--name-only" >"$GH_STATE/git-fails"
+listing
+run "$work/out4"
+rm -f "$GH_STATE/git-fails"
+kept update/gamma-1.2.0
+kept update/delta-3.0.0
+unmoved
+logged "$work/out4" "cannot tell what"
+
+echo "--- fifth run: git fetch fails"
+offer
+echo "fetch" >"$GH_STATE/git-fails"
+listing
+run "$work/out5"
+rm -f "$GH_STATE/git-fails"
+kept update/gamma-1.2.0
+unmoved
+logged "$work/out5" "update/gamma-1.2.0: could not fetch"
+
+echo "--- sixth run: nothing fails"
+offer
+listing
+run "$work/out6"
+head="$(git ls-remote origin refs/heads/main | cut -f1)"
+if [ "$head" = "$gamma2" ]; then
+	ok "the same branch lands once nothing fails"
+else
+	no "main is $head, expected $gamma2: the branch kept above was not landable anyway"
 fi
 
 if [ "$result" = 0 ]; then
