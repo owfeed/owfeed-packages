@@ -175,6 +175,10 @@ feed_version() {
 # local `git checkout -b x` does write the reflog and does not show it.
 BASE="$(git rev-parse --abbrev-ref HEAD)"
 
+# Packages whose check stopped, reported together once the loop is done. See the end
+# of the loop for why one of them must not end it.
+failed=""
+
 for up in packages/*/upstream.sh; do
 	dir="$(dirname "$up")"
 	name="$(basename "$dir")"
@@ -418,5 +422,28 @@ can be merged.")"; then
 		fi
 		git checkout -q "$BASE"
 		git checkout -q "$up"
-	)
+	) || {
+		# One package stopping must not stop the others. The body runs in a
+		# subshell, and under `set -eu` a subshell that exits non-zero ends the
+		# `for` itself -- so an `exit 1` above for one release took every package
+		# after it out of the run. Measured on 2026-09-11: `luci-app-podkop-bot`
+		# failed fourth of six, and `luci-theme-footstrap` and `podkop-updater`
+		# were never asked about at all. Reproduced in dash: without this handler
+		# the loop ends at the failing item; with it the next item is checked.
+		#
+		# The stop can come after `sed` has already rewritten this package's
+		# upstream.sh, or after the update branch was checked out, so the next
+		# package would start from a dirty tree or the wrong branch. `-f` puts
+		# both back: the branch and every tracked file.
+		echo "$name: stopped; the remaining packages are still checked" >&2
+		git checkout -q -f "$BASE"
+		failed="$failed $name"
+	}
 done
+
+# Still red when anything stopped. Continuing past a failure is about checking the
+# rest, not about hiding this one: a check that could not run counts as failed.
+if [ -n "$failed" ]; then
+	echo "check stopped for:$failed" >&2
+	exit 1
+fi
