@@ -77,7 +77,29 @@ permissions:
   contents: read
 
 jobs:
+  # The self-tests of the scripts under tools/, which the reusable workflow below
+  # never exercises. Three of those scripts decide what reaches `main` with nobody
+  # watching -- which updates get proposed, which branches land, which copyleft
+  # package may be published -- and each has shipped a fix whose test stayed on a
+  # local branch while the fix itself regressed. Seconds of shell against local git
+  # repositories and stubbed `gh`/`curl`, no network and no key, so it runs first and
+  # an hour of build and smoke is not spent on a tree whose tooling is already known
+  # to be broken.
+  #
+  # Its own name, and `check` keeps its name: `tools/land-updates.sh` gates on the
+  # contexts `check / build` and `check / check`, and renaming that job would leave
+  # every update branch waiting for a context that no longer exists.
+  tools:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Self-test the scripts under tools/
+        run: sh tools/test-sources.sh && sh tools/test-land-updates.sh && sh tools/test-check-updates.sh
+
   check:
+    needs: tools
     # The same block the publish caller needs, and not a mistake. A called
     # workflow is validated as a whole, so a caller granting less than any of its
     # jobs declares fails at startup instead of skipping that job -- and feed.yml

@@ -141,6 +141,11 @@ field is set where the package is built, so the answer is a message to upstream.
 `feeds/base/<name>` fails the same way an empty one does — that is the path the SDK built from, not
 somewhere a user can go.
 
+**`tools` failed.** A self-test of a script under `tools/` is red, and `check` did not start. The log
+prints `FAIL` beside the broken case. Run the tests locally before you push a change to `tools/`:
+`sh tools/test-sources.sh`, `sh tools/test-land-updates.sh`, `sh tools/test-check-updates.sh`. They
+need `git` and `jq` and reach no network.
+
 ---
 
 ## An update appeared and I do not recognise the version
