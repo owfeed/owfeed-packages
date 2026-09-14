@@ -2,7 +2,7 @@
 # something proposes the update as a diff; otherwise it is a version nobody chose
 # that stops receiving fixes -- the failure mode of pinning without automation.
 #
-# The VizzleTF/* references are tags rather than SHAs and Dependabot moves those
+# The owfeed/* references are tags rather than SHAs and Dependabot moves those
 # too, which matters more here than anywhere: this repository's workflows name the
 # tool that signs what it publishes.
 version: 2
