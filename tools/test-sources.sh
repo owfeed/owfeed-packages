@@ -90,6 +90,9 @@ rel="$d/release"
 stub="$d/bin"
 mkdir -p "$rel" "$stub" "$d/tools" "$d/packages/luci-app-example" "$d/keys"
 cp "$FETCH" "$d/tools/fetch.sh"
+# fetch.sh downloads through tools/net.sh beside it. The stub `curl` below prints no
+# `-w` status, and net.sh reads that only when curl fails, which this one never does.
+cp "$ROOT/tools/net.sh" "$d/tools/net.sh"
 cat > "$d/packages/luci-app-example/upstream.sh" <<'EOF'
 KIND="manifest"
 REPO="example/luci-app-example"

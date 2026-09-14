@@ -7,6 +7,11 @@
 # start with copying somebody else's shell.
 #
 # Usage: tools/fetch.sh packages/<name>
+#
+# Exit 8: upstream outage that outlasted the retries in tools/net.sh -- rerun the job.
+# Exit 7: a check failed -- a 404 of a pinned asset, a checksum, size or signature
+# that does not match. Never rerun that one to make it pass. Anything else: a bug here
+# or in upstream.sh.
 set -eu
 
 DIR="${1:?usage: tools/fetch.sh packages/<name>}"
@@ -31,21 +36,25 @@ base="https://github.com/${REPO}/releases/download/${TAG}"
 
 # get <url> <dest>
 #
-# --retry, because a release of ninety-odd assets meets a 502 from the CDN sooner or
-# later and a whole publish failing on one is noise, not a finding. Retrying is safe
-# here for the reason it usually is not: every byte fetched is checked against a hash
-# or a signature afterwards, so a retry cannot smuggle anything past.
+# Through tools/net.sh, which retries an outage in place and then exits 8, and exits 7
+# at once for a definite answer such as a 404. A release of ninety-odd assets meets a
+# 502 from the CDN sooner or later, and a whole publish failing on one is noise, not a
+# finding. Retrying is safe here for the reason it usually is not: every byte fetched
+# is checked against a hash or a signature afterwards, so a retry cannot smuggle
+# anything past.
 get() {
-	curl -fsSL --proto '=https' --tlsv1.2 \
-		--retry 5 --retry-delay 2 --retry-connrefused --retry-all-errors \
-		-o "$2" "$1"
+	"$ROOT/tools/net.sh" get "$1" "$2"
 }
 
 # download <url> <dest> <sha256>
+#
+# A mismatch is exit 7, a failed check: the bytes arrived and are not the pinned ones,
+# and no rerun changes that. `|| exit $?` rather than trusting errexit, so the 8 of an
+# outage reaches the job unchanged from inside the `while read` loops below too.
 download() {
-	get "$1" "$2"
+	get "$1" "$2" || exit $?
 	got="$(sha256sum "$2" | cut -d' ' -f1)"
-	[ "$got" = "$3" ] || { echo "$1: sha256 $got, pinned $3" >&2; rm -f "$2"; exit 1; }
+	[ "$got" = "$3" ] || { echo "$1: sha256 $got, pinned $3" >&2; rm -f "$2"; exit 7; }
 }
 
 # fetch_source
@@ -137,7 +146,14 @@ fetch_source() {
 		# known until the index is built -- so tools/sources.sh is what refuses,
 		# per package, once it can read one. Failing here instead would take down
 		# the publish of a permissive package whose upstream simply moved a tag.
-		if ! get "$url" "$dest"; then
+		#
+		# An outage is not that answer. Reading a 503 as "no source archive" would
+		# record the package as sourceless and, for a copyleft one, turn a GitHub
+		# incident into a refusal naming the package. So exit 8 goes straight out.
+		rc=0
+		get "$url" "$dest" || rc=$?
+		[ "$rc" -ne 8 ] || exit 8
+		if [ "$rc" -ne 0 ]; then
 			echo "!! $NAME: no source archive at $url" >&2
 			echo "   set SOURCE_URL in packages/$NAME/upstream.sh if the source lives elsewhere;" >&2
 			echo "   if this package is copyleft the publish will refuse it later, by name" >&2
@@ -352,7 +368,7 @@ manifest)
 		download "$base/$file" "$dest/$out" "$sum"
 
 		got_size="$(wc -c < "$dest/$out" | tr -d ' ')"
-		[ "$got_size" = "$size" ] || { echo "$file: $got_size bytes, manifest says $size" >&2; exit 1; }
+		[ "$got_size" = "$size" ] || { echo "$file: $got_size bytes, manifest says $size" >&2; exit 7; }
 
 		# The manifest's signature already covers this file's hash, so a detached
 		# signature beside it adds nothing here -- it exists for consumers that know

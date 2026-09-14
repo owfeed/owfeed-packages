@@ -15,7 +15,12 @@
 # Usage: tools/intake-check.sh <issue-body-file> > verdict.md
 set -eu
 
+#
+# Exit 8: GitHub or the manifest's host did not answer, so nothing was decided and
+# intake.yml says that instead of posting a verdict. A 503 read as "no such release"
+# would send a requester looking for a mistake they did not make.
 BODY="${1:?usage: tools/intake-check.sh <issue-body-file>}"
+NET="$(cd "$(dirname "$0")" && pwd)/net.sh"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
@@ -56,7 +61,10 @@ say "\`$REPO\` @ \`$TAG\` — declared shape: \`$KIND\`"
 say ""
 
 # The release has to exist before anything else is worth checking.
-if ! gh release view "$TAG" --repo "$REPO" --json tagName >/dev/null 2>&1; then
+rc=0
+"$NET" gh release view "$TAG" --repo "$REPO" --json tagName >/dev/null 2>&1 || rc=$?
+[ "$rc" -ne 8 ] || exit 8
+if [ "$rc" -ne 0 ]; then
 	bad "No release \`$TAG\` in \`$REPO\`, or the repository is private."
 	say ""
 	say "Nothing else could be checked."
@@ -72,8 +80,13 @@ manifest)
 		bad "The manifest shape needs a manifest URL, and none was given."
 	else
 		printf '%s\n' "$PUBKEY" > "$WORK/claimed.pub"
-		if ! curl -fsSL --max-time 60 "$MF_URL" -o "$WORK/manifest.txt" ||
-		   ! curl -fsSL --max-time 60 "$MF_URL.sig" -o "$WORK/manifest.txt.sig"; then
+		# 60 s per attempt, as before: the URL is the requester's choice, and a
+		# server that trickles bytes must not hold the job for hours.
+		rc=0
+		NET_MAX_TIME=60 "$NET" get "$MF_URL" "$WORK/manifest.txt" || rc=$?
+		[ "$rc" -ne 0 ] || NET_MAX_TIME=60 "$NET" get "$MF_URL.sig" "$WORK/manifest.txt.sig" || rc=$?
+		[ "$rc" -ne 8 ] || exit 8
+		if [ "$rc" -ne 0 ]; then
 			bad "Could not fetch the manifest and its \`.sig\` from that URL."
 		else
 			# VERIFY BEFORE READING, exactly as ingest does: every value inside

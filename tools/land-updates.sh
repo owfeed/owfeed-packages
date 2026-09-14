@@ -38,6 +38,11 @@ set -eu
 # guess is a call that can guess a different repository.
 SELF="${GITHUB_REPOSITORY:-$(gh repo view --json nameWithOwner -q .nameWithOwner)}"
 
+# The reads below go through tools/net.sh, which retries a GitHub outage and exits 8
+# when one outlasts it. Only reads: the push and the delete are git, and a retried
+# write is not something to do without knowing whether the first one landed.
+NET="$(cd "$(dirname "$0")" && pwd)/net.sh"
+
 # The contexts this script requires before it pushes, spelled exactly as the check
 # runs report them: `pr.yml`'s job is `check` and it calls owfeed's reusable `feed.yml`,
 # whose jobs are `build` and `check`, so each name is "<caller job> / <called job>".
@@ -166,11 +171,15 @@ land() {
 	# for every command in it: a failed call left `pr` empty and the function
 	# carried on to push a branch whose pull request was waiting for a person.
 	# Reproduced with a stub `gh` that exits 1 -- tools/test-land-updates.sh.
-	if ! pr="$(gh pr list -R "$SELF" --head "$branch" --state open --json number -q '.[0].number')"; then
+	#
+	# The status is returned as it came, so the 8 of an outage reaches the loop below.
+	rc=0
+	pr="$("$NET" gh pr list -R "$SELF" --head "$branch" --state open --json number -q '.[0].number')" || rc=$?
+	if [ "$rc" -ne 0 ]; then
 		echo "$branch: could not read its pull requests, so it is not landed this run"
 		echo "  failed: gh pr list -R $SELF --head $branch --state open"
 		echo "  a branch waiting for a person looks like any other until this answers; the next run asks again"
-		return 1
+		return "$rc"
 	fi
 	if [ -n "$pr" ]; then
 		echo "$branch: pull request #$pr is open; a person merges that one"
@@ -197,11 +206,13 @@ land() {
 	# A failed read already falls the safe way -- no runs seen is "no run" -- but it
 	# would say so as "not green yet", which sends whoever reads the log to the
 	# checks instead of to the API call that failed.
-	if ! checks="$(gh api "repos/$SELF/commits/$sha/check-runs?per_page=100" \
-		-q '.check_runs[] | "\(.status)/\(.conclusion // "pending")\t\(.name)"')"; then
+	rc=0
+	checks="$("$NET" gh api "repos/$SELF/commits/$sha/check-runs?per_page=100" \
+		-q '.check_runs[] | "\(.status)/\(.conclusion // "pending")\t\(.name)"')" || rc=$?
+	if [ "$rc" -ne 0 ]; then
 		echo "$branch: could not read its check runs, so it is not landed this run"
 		echo "  failed: gh api repos/$SELF/commits/$sha/check-runs"
-		return 1
+		return "$rc"
 	fi
 
 	# Every run of a required name has to be completed and successful, not just
@@ -332,7 +343,7 @@ land() {
 # `matching-refs` rather than `gh pr list`: these branches have no pull request, and
 # it answers with the head sha in the same call, so nothing is read twice from a
 # repository that may change between calls. An empty result is `[]` and a normal day.
-refs="$(gh api "repos/$SELF/git/matching-refs/heads/update/" \
+refs="$("$NET" gh api "repos/$SELF/git/matching-refs/heads/update/" \
 	-q '.[] | "\(.object.sha) \(.ref)"')"
 if [ -z "$refs" ]; then
 	echo "no update branches"
@@ -354,12 +365,22 @@ fi
 # `failed` survives it; a pipeline would run the loop in a subshell and lose it.
 # `land` reads nothing from stdin, and `</dev/null` keeps any `gh` or `git` in it
 # from swallowing the rest of the branch list.
+#
+# `land ... || rc=$?` is the same condition context as `if ! land`, and keeps the
+# status: 8 is tools/net.sh reporting a GitHub outage, anything else a failed step.
 failed=""
+outages=""
 while read -r sha ref; do
 	branch="${ref#refs/heads/}"
-	if ! land "$branch" "$sha" </dev/null; then
+	rc=0
+	land "$branch" "$sha" </dev/null || rc=$?
+	if [ "$rc" -ne 0 ]; then
 		echo "$branch: not landed this run (the step above failed)"
-		failed="$failed $branch"
+		if [ "$rc" -eq 8 ]; then
+			outages="$outages $branch"
+		else
+			failed="$failed $branch"
+		fi
 	fi
 done <<EOF
 $refs
@@ -369,8 +390,17 @@ EOF
 # end of check-updates.sh. Green here used to mean "nothing failed" and "a `gh`
 # outage stopped every branch" alike, and a scheduled run nobody watches only gets
 # looked at when it is red.
+#
+# Exit 8 only when an outage is all that happened: it tells the reader a later run is
+# the whole fix, which is not true once any other step failed beside it.
 if [ -n "$failed" ]; then
 	echo "not landed because a step failed:$failed" >&2
+	[ -z "$outages" ] || echo "not landed because GitHub did not answer:$outages" >&2
 	echo "  every other branch was still read; the lines above name the command that failed" >&2
 	exit 1
+fi
+if [ -n "$outages" ]; then
+	echo "not landed because GitHub did not answer:$outages" >&2
+	echo "  an upstream outage, not a finding; the next scheduled run reads them again" >&2
+	exit 8
 fi
