@@ -117,7 +117,7 @@ jobs:
     # tagged with, so this line is the whole pin. It used to be a second pin
     # beside it, and dependabot moved only this one -- the feed ran feed.yml@v0.5.1
     # with an owfeed v0.4.5 binary from #65 until this line was fixed.
-    uses: owfeed/owfeed/.github/workflows/feed.yml@v0.5.2
+    uses: owfeed/owfeed/.github/workflows/feed.yml@v0.5.3
     with:
       dry-run: true
       pre-build: for d in packages/*/; do ./tools/fetch.sh "$d"; done

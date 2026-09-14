@@ -27,11 +27,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # Both lines move together. setup defaults to "latest", not to its own tag,
-      # so the version stays explicit -- and dependabot moves only the uses: ref.
-      - uses: owfeed/owfeed/setup@v0.5.2
-        with:
-          version: v0.5.2
+      # No `version:`: since owfeed v0.5.3 setup installs the release it is pinned
+      # at, so this line is the whole pin and a dependabot bump moves the binary too.
+      - uses: owfeed/owfeed/setup@v0.5.3
 
       - name: Read the request and answer it
         env:
