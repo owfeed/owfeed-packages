@@ -69,8 +69,8 @@ A merge or a push made with `GITHUB_TOKEN` raises no `push` event either, which 
 dispatched rather than triggered. `workflow_dispatch` is the documented exception in both cases:
 those events always create runs.
 
-**How owfeed gets here.** `owfeed/owfeed/setup@v0.5.3`, pinned to a release. In `pr.yml` and
-`publish.yml` the pin is the `uses: .../feed.yml@v0.5.3` line alone: that workflow installs the
+**How owfeed gets here.** `owfeed/owfeed/setup@v0.5.4`, pinned to a release. In `pr.yml` and
+`publish.yml` the pin is the `uses: .../feed.yml@v0.5.4` line alone: that workflow installs the
 owfeed release it is tagged with, so do not add `owfeed-version:` back. The action downloads
 one binary and checks it against the build attestation from owfeed's own release workflow before
 running it — not against a checksum from the same release, which whoever replaced the binary could

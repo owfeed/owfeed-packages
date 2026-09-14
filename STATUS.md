@@ -25,7 +25,7 @@ it is the last time the URL has to move.
 | | Evidence |
 |---|---|
 | Feed updates reaching a router | Upstream released 0.14.10 → the update bot opened #51 with the pins recomputed → a maintainer approved the held check and merged it → `Publish` → the served 25.12 index carries `0.14.10-r1`, read from a router. That was the path before #61; the row below is the same journey without a person |
-| Publishing through owfeed's reusable workflow | `publish.yml` calls `feed.yml@v0.5.3` with `secrets: inherit`; a probe (at v0.5.0) measured that a called job's `environment: feed` resolves against this repository, and the signing secrets reached it at their real length |
+| Publishing through owfeed's reusable workflow | `publish.yml` calls `feed.yml@v0.5.4` with `secrets: inherit`; a probe (at v0.5.0) measured that a called job's `environment: feed` resolves against this repository, and the signing secrets reached it at their real length |
 | An author signature inside every package | `signing.author-keys: ./keys` in `owfeed.yml`, one EC public half pinned per package; an unsigned package is dropped from the index (OWF407) and `tools/check-tree.sh` then fails the publish, so a green publish is the evidence |
 | Automatic-update tier rules | Six scenarios exercised in a real git repository: manifest/minor merges, major bump holds, `binaries` holds, no `SIG_KEY` holds, a diff touching `SIG_KEY_ID` holds, the daily ceiling holds |
 | Verify before read | `tools/fetch.sh` checks the signature before parsing, and cross-checks `repo` and `tag` inside the manifest — the signature says *who*, never *what about* |
