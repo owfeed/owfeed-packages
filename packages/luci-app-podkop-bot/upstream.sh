@@ -5,8 +5,8 @@
 KIND="manifest"
 
 REPO="Medvedolog/luci-app-podkop-bot"
-VERSION="0.19.17-r2"
-TAG="0.19.17-2"
+VERSION="0.19.19-r22"
+TAG="0.19.19-22"
 
 SIG_KEY="keys/luci-app-podkop-bot.pub"
 SIG_KEY_ID="d6971b8a1b9a8ba4"
