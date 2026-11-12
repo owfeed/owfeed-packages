@@ -7,7 +7,7 @@ body:
     attributes:
       value: |
         This feed does not build anything. It ingests packages their authors already
-        built and signed, verifies them against a key pinned here, and re-signs them
+        built and signed, verifies them against a key pinned here, and signs its index
         with the feed's own key so routers can verify one thing instead of many.
 
         That means two things about this request. Your release has to be something a
@@ -139,6 +139,6 @@ body:
             presented as an official build of a project it is not part of.
           required: true
         - label: >-
-            I understand this feed re-signs what it ingests with its own key, and
-            that my signature travels inside the package unchanged.
+            I understand this feed signs its index with its own key and leaves
+            the package, with my signature inside it, unchanged.
           required: true
