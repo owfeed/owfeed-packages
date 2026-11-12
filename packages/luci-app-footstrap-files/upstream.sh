@@ -17,8 +17,8 @@ KIND="manifest"
 # 25.12 installs the .apk, 24.10 the .ipk. They are the same build.
 
 REPO="VizzleTF/luci-app-footstrap-files"
-VERSION="0.1.4-r1"
-TAG="v0.1.4"
+VERSION="0.1.5-r1"
+TAG="v0.1.5"
 
 # The shared usign release key, as for the other three: one release pipeline signs
 # them all, and this feed already pins its public half. The EC key the packages
