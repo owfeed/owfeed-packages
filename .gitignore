@@ -2,6 +2,7 @@
 # to say a key is dead.
 *.pem
 *.key
+*.sec
 
 # Public halves are the point of keys/ and must be committed. The exception is
 # deliberately narrow: only *.pub.pem, so a private key dropped there by accident as
