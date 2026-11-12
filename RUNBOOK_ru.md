@@ -5,7 +5,8 @@
 Что делать, когда в автоматике фида что-то сломалось. Для дежурного мейнтейнера.
 Про добавление и обновление пакетов — [CONTRIBUTING_ru.md](CONTRIBUTING_ru.md).
 
-- **Ключ подписи** есть только во втором publish-job'е на `main`, за `environment: feed`.
+- **Ключ подписи** использует только второй publish-job на `main`, который идёт за
+  `environment: feed`. Сами ключи — секреты репозитория.
   Pull request'ы и ветки `update/*` работают с одноразовыми ключами.
 - **Доверенное обновление не открывает PR.** Плановый job пушит `update/<пакет>-<версия>` и
   запускает на ней `Check`. Следующий прогон `land-updates.sh` переводит на неё `main` fast-forward'ом.
@@ -110,7 +111,7 @@ MISSING luci-theme-footstrap luci-theme-footstrap_0.11.6-r1_all.ipk on 24.10: ab
   job.
 
 То же сообщение печатают `check-updates.sh`, `land-updates.sh` и intake — все ходят через
-`tools/net.sh`. До этого изменения симптом выглядел как шесть строк
+`tools/net.sh`. В старом прогоне вместо него может быть шесть строк
 `curl: (22) The requested URL returned error: 500` и `exit code 22`. Это тоже сбой апстрима и тоже
 перезапуск.
 
@@ -183,13 +184,69 @@ job'а бывают ещё две формы:
 
 ## Публикация упала
 
-Публикация — отдельный job с ключом. Частые причины:
+`publish.yml` вызывает переиспользуемый workflow owfeed, `owfeed/owfeed/.github/workflows/feed.yml`.
+Его job `build` работает без ключа. Job `publish` держит ключ и выполняется в окружении `feed`.
+
+1. Откройте упавший прогон `Publish` и найдите красный шаг в таблице ниже.
+2. Устраните причину по разделу, который называет таблица.
+3. Перезапустите упавшие job'ы со страницы прогона или командой `gh run rerun <run-id> --failed`.
+
+- **Артефакт сборки хранится один день** (`retention-days: 1`). Позже перезапуску `publish` нечего
+  скачивать. Запустите новый прогон: `gh workflow run publish.yml --ref main`.
+- **Одобрение:** окружение `feed` решает, ждёт ли `publish` ревьюера. Если у него есть обязательные
+  ревьюеры, одобрите job на странице прогона. Пустой список от этой команды значит, что job
+  стартует сразу:
+
+  ```sh
+  gh api repos/owfeed/owfeed-packages/environments/feed --jq .protection_rules
+  ```
+
+### Какой шаг упал
+
+Шаг без имени GitHub показывает как `Run` и его команду.
+
+| Job | Шаг | Что выполняет | Раздел |
+|---|---|---|---|
+| `build` | `Run bash -euo pipefail -c "$SCRIPT"` | `pre-build`: `./tools/fetch.sh` для каждого пакета | строки про fetch в [Проверка красная](#проверка-красная) |
+| `build` | `Run owfeed --frozen-lock build` | `owfeed build` по `owfeed.lock` | [Что намеренно не автоматизировано](#что-намеренно-не-автоматизировано), покрытие архитектур |
+| `publish` | `Check a signing key is reachable` | выходит с кодом 4, когда `OWFEED_SIGN_KEY` пуст | [Частые причины](#частые-причины) |
+| `publish` | `Sign and index` | `owfeed sign`, `owfeed index` | [Частые причины](#частые-причины), [Коды выхода](#коды-выхода) |
+| `publish` | `Run bash -euo pipefail -c "$SCRIPT"` | `post-index`: `check-tree.sh`, `check-origin.sh`, `sources.sh` | [Пакет пропал](#пакет-пропал), [`NO ORIGIN`](#no-origin--от-toolscheck-originsh) |
+| `publish` | `Install it on a real image` | `owfeed smoke --release` для 25.12 и 24.10 | [`smoke` упал, а `doctor` прошёл](#smoke-упал-а-doctor-прошёл) |
+| `publish` | `Compare against what is live` | `owfeed verify out` | [Частые причины](#частые-причины), `OWF513` |
+| `publish` | `Check and publish` | `owfeed publish` | [Коды выхода](#коды-выхода), код 6 |
+| `publish` | `actions/upload-pages-artifact`, `actions/deploy-pages` | деплой на Pages | [Настройки деплоя на Pages](#настройки-деплоя-на-pages-которые-ломают-живой-сайт) |
+
+У `Compare against what is live` стоит `continue-on-error: true`. Его находки не роняют job, поэтому
+читайте его лог при каждой красной или подозрительной публикации.
+
+### Частые причины
 
 | Находка | Причина | Что делать |
 |---|---|---|
-| `$OWFEED_SIGN_KEY is empty` | Секрета нет, или прогон стартовал раньше, чем секрет появился. | Перезапустите job. |
-| `owfeed verify` сообщает `OWF513` | Уже опубликованная версия имеет другое содержимое, чем то, что её заменяет. Пакет изменился без поднятия версии, или сборка перестала быть воспроизводимой. | Проверьте, что `SOURCE_DATE_EPOCH` всё ещё выставлен в воркфлоу. Не публикуйте поверх: поднимите ревизию. |
+| `no signing key: set OWFEED_SIGN_KEY in the 'feed' environment` или `$OWFEED_SIGN_KEY is empty` | Секрета нет, или прогон стартовал раньше, чем секрет появился. | Перезапустите job. |
+| `$OWFEED_USIGN_KEY is empty` | Нет секрета для подписи opkg. | Перезапустите job, когда `OWFEED_USIGN_KEY` задан. |
+| `owfeed verify` сообщает `OWF513` | Уже опубликованная версия имеет другое содержимое, чем то, что её заменяет. Пакет изменился без поднятия версии, или сборка перестала быть воспроизводимой. | Проверьте, что `SOURCE_DATE_EPOCH` всё ещё константа. Он берётся из входа `source-date-epoch` в `feed.yml`, по умолчанию `1700000000`. `publish.yml` его не задаёт. Не публикуйте поверх: поднимите ревизию. |
+| `owfeed verify` сообщает `OWF514` | Живой сайт отвечает на `/.nojekyll` не 200. | Проверьте, что шаг загрузки задаёт `include-hidden-files: true`, и перезапустите. См. [Настройки деплоя на Pages](#настройки-деплоя-на-pages-которые-ломают-живой-сайт). |
 | Pages не обновились | Деплой делает `actions/deploy-pages`. | Смотрите тот job, а не фид. |
+
+### Коды выхода
+
+`owfeed` выходит с этими кодами, они заданы в `cmd/owfeed/main.go` в owfeed. `tools/net.sh` и
+`tools/fetch.sh` используют 7 и 8 так же.
+
+| Код | Имя в исходниках | Перезапускать? |
+|---|---|---|
+| 0 | OK | |
+| 1 | internal | |
+| 2 | config | |
+| 3 | build | |
+| 4 | key | |
+| 5 | index | |
+| 6 | publish | |
+| 7 | check | никогда: проверка не прошла |
+| 8 | upstream | да: сбой апстрима |
+| 9 | conflict, например с `owfeed.lock` | после `owfeed lock --update` и чтения дифа |
 
 ### Настройки деплоя на Pages, которые ломают живой сайт
 
@@ -200,7 +257,8 @@ job'а бывают ещё две формы:
 - **`actions/deploy-pages` нужен `actions: read`.** Блок `permissions:`, который называет другие
   области, молча его отбирает.
 - **`owfeed verify` сообщает OWF514**, когда живой сайт потерял `.nojekyll`. Снаружи деплоя —
-  единственное место, где этот ответ существует.
+  единственное место, где этот ответ существует. Исправление от owfeed: задать
+  `include-hidden-files: true` у `actions/upload-pages-artifact`. Запиненный `feed.yml` его задаёт.
 
 ---
 
@@ -230,15 +288,18 @@ owfeed smoke                  # ставит собранный фид на жи
 1. Убедитесь, что релиз owfeed опубликован. Если запушить `setup@vX.Y.Z`, пока тот релиз ещё
    собирается, каждый job упадёт с *«does not verify as built by owfeed/owfeed's release workflow»*.
    Читается как атака, а на деле гонка.
-2. Передвиньте пин. Это одна строка в каждом workflow: `uses: .../feed.yml@v0.5.8` в `pr.yml` и
-   `publish.yml`, `uses: owfeed/owfeed/setup@v0.5.8` в `intake.yml`. `owfeed-version:` обратно не
+2. Передвиньте пин. Это одна строка в каждом workflow: `uses: owfeed/owfeed/.github/workflows/feed.yml@v0.5.8`
+   в `pr.yml` и `publish.yml`, `uses: owfeed/owfeed/setup@v0.5.8` в `intake.yml`. `owfeed-version:` обратно не
    добавляйте: этот workflow ставит тот релиз owfeed, которым помечен сам.
-3. Проверьте, что передвинулись все строки. Проверяйте grep'ом, а не по памяти. Он
-   выводит и комментарии с версией; их не трогайте.
+3. Проверьте, что передвинулись все строки. Проверяйте grep'ом, а не по памяти. Он ловит любую
+   мажорную версию, так что подойдёт и для v1.x. Он выводит и комментарии с версией; их не трогайте.
 
    ```sh
-   grep -rn 'v0\.' .github/workflows
+   grep -rnE '@v[0-9]+\.' .github/workflows
    ```
+
+   Если после этого сборка падает на `owfeed.lock`, выполните `owfeed lock --update`, прочитайте диф
+   и закоммитьте его в тот же pull request.
 
 4. Откройте pull request, как для всего остального.
 
@@ -290,7 +351,13 @@ owfeed smoke                  # ставит собранный фид на жи
 
 ### Ротация ключа
 
-Команды в owfeed для этого пока нет; шаги описаны в его дизайн-документе. Кратко:
+Команды ротации в owfeed пока нет: см. Limits в
+[README owfeed](https://github.com/owfeed/owfeed/blob/main/README.md#limits). С owfeed v0.4.0
+`signing.also-sign` подписывает индекс вторым ключом, а `signing.keyring-package` доставляет новый
+публичный ключ на роутеры. В `owfeed.yml` этого фида не задано ни то, ни другое. Измеренная
+последовательность описана в
+[apk-behaviour.md](https://github.com/owfeed/owfeed/blob/main/docs/apk-behaviour.md#a-keyring-package-cannot-start-a-rotation-on-its-own).
+Кратко:
 
 1. Сгенерируйте новый ключ.
 2. Опубликуйте оба публичных ключа на время перекрытия.

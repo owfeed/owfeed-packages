@@ -25,6 +25,8 @@ owfeed.yml                    a packages: entry, only when owfeed has to build i
 |---|---|
 | Know what I am responsible for | [What you are agreeing to](#what-you-are-agreeing-to) |
 | Set up signing | [Sign every package with your own key](#sign-every-package-with-your-own-key) |
+| Create the release key `SIG_KEY` names | [The usign key, for signed releases](#the-usign-key-for-signed-releases) |
+| Submit a package | [Request the package, then open a pull request](#request-the-package-then-open-a-pull-request) |
 | Add a package | [Add a package](#add-a-package) |
 | Publish from my own CI | [I build in my own CI](#i-build-in-my-own-ci-and-want-my-package-in-this-feed) |
 | Update a package by hand | [Update a package](#update-a-package) |
@@ -102,6 +104,49 @@ this; it is not a request.
 Use one key per repository. A signature says who wrote something and never what it is about. A key
 shared across repositories vouches for all of them at once.
 
+### Which keys you need
+
+| Key | You need it for | Create it with | Files written | Pinned here as |
+|---|---|---|---|---|
+| EC prime256v1 | every package: `owfeed sign` puts the signature inside it | `owfeed keygen -o author.pem` | `author.pem` (private, mode 0600), `author.pub.pem` (public) | `keys/<package>.pub.pem` |
+| usign | signed releases: `owfeed release` and the `.sig` beside each asset | `owfeed keygen -usign -o ~/keys/example-daemon.sec` | `example-daemon.sec` (private, mode 0600), `example-daemon.pub` (public) | `keys/example-daemon.pub`, the file `SIG_KEY` names |
+
+- `-o` sets the private key's path. The public half goes beside it, with the extension replaced.
+- `keygen` refuses to write a key inside a git working tree, unless you pass `--force`.
+- Send only the public halves. Keep both private keys out of git: neither can be revoked.
+
+### The usign key, for signed releases
+
+You need it for `KIND="manifest"`, and for any package that sets `AUTO_MERGE="yes"`.
+
+1. Create the key once, outside any git working tree, and store it as a CI secret:
+
+   ```sh
+   owfeed keygen -usign -o ~/keys/example-daemon.sec
+   gh secret set OWFEED_RELEASE_KEY < ~/keys/example-daemon.sec
+   ```
+
+   `owfeed release` reads `env:OWFEED_RELEASE_KEY` unless you pass `--key`.
+
+2. Note the `key id:` line `keygen` prints. It is 16 hex digits.
+3. Send the public half, `example-daemon.pub`, with the pull request. It is pinned as
+   `keys/example-daemon.pub`.
+4. In `packages/<name>/upstream.sh`, set both values:
+
+   | Variable | Value |
+   |---|---|
+   | `SIG_KEY` | the pinned public key, as a path from the repository root: `keys/example-daemon.pub` |
+   | `SIG_KEY_ID` | the key id. `tools/fetch.sh` passes it to `owfeed verify-artifact --key-id`, which refuses a signature by any other key. |
+
+To print the id of a `.pub` file later, decode bytes 3 to 10 of its second line:
+
+```sh
+sed -n 2p keys/example-daemon.pub | base64 -d | od -An -tx1 -j2 -N8 | tr -d ' \n'
+```
+
+One key per repository applies to this key too. One pinned usign key does not meet it yet: see
+[Known contradictions in STATUS.md](STATUS.md#known-contradictions).
+
 <details><summary>Why the author signs, and the release signature is not enough</summary>
 
 The usign signature beside a release is checked once, here, at ingest, and then it is gone. The EC
@@ -129,7 +174,7 @@ can disagree with the pin. That is how a rotated or substituted key gets noticed
 2. If the package has to reach 24.10 routers too, check [both release lines](#serve-both-release-lines).
 3. If your source is not at GitHub's archive for your tag, [declare it](#source-is-fetched-for-you).
 4. Set [`URL:=` in your package](#say-where-your-package-came-from).
-5. [Run the checks and open a pull request](#run-the-checks-and-open-a-pull-request).
+5. [Request the package, then open a pull request](#request-the-package-then-open-a-pull-request).
 6. Once it is in the feed, [add the badges to your README](#show-it-in-your-readme).
 
 The three shapes are listed best first. They differ in how much this feed has to be told and how much
@@ -155,7 +200,7 @@ VERSION="0.3.5-r1"
 TAG="v0.3.5"
 
 SIG_KEY="keys/example-daemon.pub"
-SIG_KEY_ID="37ddece4c0eef357"
+SIG_KEY_ID="0123456789abcdef"
 AUTO_MERGE="yes"
 ```
 
@@ -338,6 +383,16 @@ other people's work, it is the only thing telling a user who published what they
 
 Set `URL:=` even when `Source:` already looks filled in. On a package built by OpenWrt's SDK,
 `Source:` is the feed path it was built from, not a place anyone can go.
+
+### Request the package, then open a pull request
+
+This is the one way to submit a package.
+
+1. Open a [package request](https://github.com/owfeed/owfeed-packages/issues/new?template=package-request.yml).
+   The intake check reads the release and answers on the issue. It re-runs on every edit.
+2. Fix what it marks in bold, until it answers **Ready for a person**.
+3. Run the checks below locally, then open a pull request. It adds `packages/<name>/upstream.sh`
+   and your public keys under `keys/`.
 
 ### Run the checks and open a pull request
 
@@ -538,9 +593,10 @@ name it has always had.
 
 ### On this side
 
-Open one pull request, once. It adds `packages/<name>/upstream.sh` with your repository, your public
-key and the first pin, plus your key under `keys/`. After that, the update job follows your releases
-and opens the updates itself.
+Submit once, the [same way as any package](#request-the-package-then-open-a-pull-request): a
+package request, then one pull request. The pull request adds `packages/<name>/upstream.sh` with your
+repository, your public key and the first pin, plus your key under `keys/`. After that, the update
+job follows your releases and opens the updates itself.
 
 Expect your key to be read carefully: adding it is the diff that deserves a second look. That is the
 moment this feed decides whose provenance it will carry. It does not endorse your software or take

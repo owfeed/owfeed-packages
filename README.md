@@ -1,5 +1,7 @@
 # owfeed community packages
 
+*[Русская версия](README_ru.md)*
+
 An OpenWrt package feed for both release lines: apk for 25.12 and later, opkg for 24.10 and earlier.
 [owfeed](https://github.com/owfeed/owfeed) builds and publishes it.
 
@@ -16,7 +18,12 @@ An OpenWrt package feed for both release lines: apk for 25.12 and later, opkg fo
    wget -O subscribe.sh https://repo.owfeed.org/subscribe.sh && less subscribe.sh && sh subscribe.sh
    ```
 
-2. Install a package by name: `apk add <name>`. The script installs no packages.
+   If `wget` fails on HTTPS, the image lacks two packages. Stock images have them; custom builds
+   may not. Install them and run step 1 again: `apk add ca-bundle libustream-mbedtls`. On 24.10,
+   use `opkg install` instead of `apk add`.
+
+2. Install a package by name: `apk add <name>` on 25.12, `opkg install <name>` on 24.10. The
+   script installs no packages.
 
 The one-line form skips the reading step:
 
@@ -35,6 +42,7 @@ wget -qO- https://repo.owfeed.org/subscribe.sh | sh
 | install a downloaded `.apk` file | [Install by name](#install-by-name-from-the-index) |
 | upgrade with Attended Sysupgrade | [Attended Sysupgrade](#attended-sysupgrade-drops-these-packages) |
 | decide whether to trust the key | [Before you install the key](#before-you-install-the-key) |
+| check the key I downloaded | [Check the key you installed](#check-the-key-you-installed) |
 | know what the signature proves | [What this feed's signature means](#what-this-feeds-signature-means) |
 | report a bug in a package | [At your own risk](#everything-here-is-used-at-your-own-risk) |
 | know how packages get updated | [Staying current](#staying-current) |
@@ -46,12 +54,15 @@ wget -qO- https://repo.owfeed.org/subscribe.sh | sh
 It works on either release line.
 
 1. Reads the router's package manager, architecture and release.
-2. Installs the key.
-3. Adds the repository.
-4. Keeps the key and the repository across a firmware upgrade.
+2. On 25.12, installs `ca-bundle` and `libustream-mbedtls`, which HTTPS needs.
+3. Installs the key.
+4. Adds the repository.
+5. Keeps the key and the repository across a firmware upgrade. It writes
+   `/lib/upgrade/keep.d/owfeed-packages`, the same file the commands below write.
 
-- Re-running it changes nothing twice.
-- It installs no packages. Run `apk add <name>` after it.
+- Re-running it changes nothing twice. On 24.10 it deletes its old line from
+  `/etc/opkg/customfeeds.conf` before it adds the new one.
+- It installs no packages. Run `apk add <name>` or `opkg install <name>` after it.
 - `owfeed index` generates it from the config that laid this feed out. So it cannot document a URL the
   feed does not serve. Read it anyway: it runs as root.
 
@@ -71,10 +82,13 @@ printf '%s\n' /etc/apk/keys/owfeed-packages.pem /etc/apk/repositories.d/owfeed-p
 apk update && apk add luci-theme-footstrap
 ```
 
+`luci-theme-footstrap` is one package this feed carries. Put the name of the package you want.
+
 ## By hand on OpenWrt 24.10 and earlier
 
 ```sh
 # The key file's NAME is its id — opkg looks it up by that.
+mkdir -p /etc/opkg/keys
 wget https://repo.owfeed.org/9040356b214084da -O /etc/opkg/keys/9040356b214084da
 
 echo "src/gz owfeed-packages https://repo.owfeed.org/releases/24.10/$(. /etc/openwrt_release; echo $DISTRIB_ARCH)" >> /etc/opkg/customfeeds.conf
@@ -85,6 +99,10 @@ printf '%s\n' /etc/opkg/keys/9040356b214084da /etc/opkg/customfeeds.conf > /lib/
 
 opkg update && opkg install luci-theme-footstrap
 ```
+
+- Run this block once. `>>` appends, so a second run adds a second `src/gz owfeed-packages` line.
+  The subscribe script deletes the old line first, so it is safe to re-run.
+- `luci-theme-footstrap` is one package this feed carries. Put the name of the package you want.
 
 ## Install by name from the index
 
@@ -110,6 +128,33 @@ Install the key because you trust who publishes it. A page telling you to is not
 - It validates an index claiming any name at all. So this feed, or anyone holding a compromised key,
   could offer a higher version of a base package such as `dropbear` or `base-files` and win the resolution.
 - apk has no revocation: no CRL, no expiry, no way to say a key is dead.
+
+## Check the key you installed
+
+Compare the key on your router with a copy fetched another way. The same hash means the same file.
+
+| Release line | Key file on the router | Published at |
+|---|---|---|
+| 25.12 and later | `/etc/apk/keys/owfeed-packages.pem` | `https://repo.owfeed.org/owfeed-packages.pem` |
+| 24.10 and earlier | `/etc/opkg/keys/9040356b214084da` | `https://repo.owfeed.org/9040356b214084da` |
+
+1. On the router, print the hash of the key file:
+
+   ```sh
+   sha256sum /etc/apk/keys/owfeed-packages.pem
+   ```
+
+2. On another machine, on another network, fetch the published key and print its hash:
+
+   ```sh
+   curl -s https://repo.owfeed.org/owfeed-packages.pem | sha256sum
+   ```
+
+3. Compare the two hashes. For the opkg key, use its path and URL from the table.
+
+- The opkg key's id is `9040356b214084da`. The key file's name is that id.
+- This repository holds no copy of the feed's own public key. The feed root is the only place it is
+  published, so the cross-check is a second fetch over a path you trust.
 
 ## What this feed's signature means
 

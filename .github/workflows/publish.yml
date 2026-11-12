@@ -39,10 +39,10 @@ jobs:
     # beside it, and dependabot moved only this one -- the feed ran feed.yml@v0.5.1
     # with an owfeed v0.4.5 binary from #65 until this line was fixed.
     uses: owfeed/owfeed/.github/workflows/feed.yml@v0.5.8
-    # So the publish job can read OWFEED_SIGN_KEY and OWFEED_USIGN_KEY from the
-    # `feed` environment. They are environment secrets, not repository ones --
-    # the scheduled update job and every pull-request check are outside that scope
-    # and cannot reach them.
+    # So the publish job can read OWFEED_SIGN_KEY and OWFEED_USIGN_KEY. They are
+    # repository secrets today; feed.yml would read them the same way from the
+    # `feed` environment, which is the stronger place: there no other workflow in
+    # this repository could reference them.
     secrets: inherit
     with:
       pre-build: for d in packages/*/; do ./tools/fetch.sh "$d"; done

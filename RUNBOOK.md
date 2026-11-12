@@ -5,7 +5,8 @@
 What to do when something in this feed's automation breaks. For the maintainer on duty.
 For adding or updating a package, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
-- **The signing key** exists only in the second publish job on `main`, behind `environment: feed`.
+- **The signing key** is used only by the second publish job on `main`, which runs behind
+  `environment: feed`. The keys themselves are repository secrets.
   Pull requests and `update/*` branches use throwaway keys.
 - **A trusted update gets no pull request.** The scheduled job pushes `update/<name>-<version>` and
   dispatches `Check`. A later run of `land-updates.sh` fast-forwards `main` onto it.
@@ -107,8 +108,8 @@ The tree is coherent, and a router will not take it. Read the container output. 
 - **Do:** once [githubstatus.com](https://www.githubstatus.com) is green, rerun the job.
 
 The same message comes from `check-updates.sh`, `land-updates.sh` and the intake job, all through
-`tools/net.sh`. Before this change the symptom was `curl: (22) The requested URL returned error: 500`
-repeated six times and `exit code 22`. That is also an outage, and also a rerun.
+`tools/net.sh`. An older run may show `curl: (22) The requested URL returned error: 500` repeated
+six times and `exit code 22` instead. That is also an outage, and also a rerun.
 
 ### `curl: (22) … 404` and exit code 7 in the fetch step
 
@@ -181,13 +182,69 @@ scheduled job's log:
 
 ## Publishing failed
 
-The publish job is a separate job with the key. Common causes:
+`publish.yml` calls owfeed's reusable `owfeed/owfeed/.github/workflows/feed.yml`. Its `build` job
+has no key. Its `publish` job holds the key and runs in the `feed` environment.
+
+1. Open the failed `Publish` run and find the red step in the table below.
+2. Fix the cause from the section the table names.
+3. Re-run the failed jobs from the run page, or with `gh run rerun <run-id> --failed`.
+
+- **The build artifact is kept one day** (`retention-days: 1`). After that, a re-run of `publish`
+  has nothing to download. Start a new run instead: `gh workflow run publish.yml --ref main`.
+- **Approval:** the `feed` environment decides whether `publish` waits for a reviewer. If it has
+  required reviewers, approve the job on the run page. An empty list from this command means the
+  job starts at once:
+
+  ```sh
+  gh api repos/owfeed/owfeed-packages/environments/feed --jq .protection_rules
+  ```
+
+### Which step failed
+
+GitHub shows a step with no name as `Run` and its command.
+
+| Job | Step | What it runs | Go to |
+|---|---|---|---|
+| `build` | `Run bash -euo pipefail -c "$SCRIPT"` | `pre-build`: `./tools/fetch.sh` for each package | the fetch rows in [A check is red](#a-check-is-red) |
+| `build` | `Run owfeed --frozen-lock build` | `owfeed build` against `owfeed.lock` | [Things that are not automatic](#things-that-are-not-automatic-on-purpose), architecture coverage |
+| `publish` | `Check a signing key is reachable` | exits 4 when `OWFEED_SIGN_KEY` is empty | [Common causes](#common-causes) |
+| `publish` | `Sign and index` | `owfeed sign`, `owfeed index` | [Common causes](#common-causes), [Exit codes](#exit-codes) |
+| `publish` | `Run bash -euo pipefail -c "$SCRIPT"` | `post-index`: `check-tree.sh`, `check-origin.sh`, `sources.sh` | [When a package goes missing](#when-a-package-goes-missing), [`NO ORIGIN`](#no-origin--from-toolscheck-originsh) |
+| `publish` | `Install it on a real image` | `owfeed smoke --release` for 25.12 and 24.10 | [`smoke` failed but `doctor` passed](#smoke-failed-but-doctor-passed) |
+| `publish` | `Compare against what is live` | `owfeed verify out` | [Common causes](#common-causes), `OWF513` |
+| `publish` | `Check and publish` | `owfeed publish` | [Exit codes](#exit-codes), code 6 |
+| `publish` | `actions/upload-pages-artifact`, `actions/deploy-pages` | the Pages deploy | [Pages deploy settings](#pages-deploy-settings-that-break-the-live-site) |
+
+`Compare against what is live` has `continue-on-error: true`. Its findings do not fail the job, so
+read its log on every red or suspicious publish.
+
+### Common causes
 
 | Finding | Cause | Do |
 |---|---|---|
-| `$OWFEED_SIGN_KEY is empty` | The secret is missing, or the run started before it existed. | Re-run the job. |
-| `owfeed verify` reports `OWF513` | A version already published has different contents than what is about to replace it. A package changed without a version bump, or a build stopped being reproducible. | Check that `SOURCE_DATE_EPOCH` is still set in the workflow. Do not publish over it: bump the revision instead. |
+| `no signing key: set OWFEED_SIGN_KEY in the 'feed' environment`, or `$OWFEED_SIGN_KEY is empty` | The secret is missing, or the run started before it existed. | Re-run the job. |
+| `$OWFEED_USIGN_KEY is empty` | The opkg signing secret is missing. | Re-run the job once `OWFEED_USIGN_KEY` is set. |
+| `owfeed verify` reports `OWF513` | A version already published has different contents than what is about to replace it. A package changed without a version bump, or a build stopped being reproducible. | Check that `SOURCE_DATE_EPOCH` is still a constant. It comes from the `source-date-epoch` input of `feed.yml`, default `1700000000`. `publish.yml` does not set it. Do not publish over it: bump the revision instead. |
+| `owfeed verify` reports `OWF514` | The live site answers something other than 200 for `/.nojekyll`. | Check that the upload step sets `include-hidden-files: true`, then re-run. See [Pages deploy settings](#pages-deploy-settings-that-break-the-live-site). |
 | Pages did not update | Deployment is `actions/deploy-pages`. | Check that job, not the feed. |
+
+### Exit codes
+
+`owfeed` exits with these codes, from `cmd/owfeed/main.go` in owfeed. `tools/net.sh` and
+`tools/fetch.sh` use 7 and 8 the same way.
+
+| Code | Name in the source | Rerun? |
+|---|---|---|
+| 0 | OK | |
+| 1 | internal | |
+| 2 | config | |
+| 3 | build | |
+| 4 | key | |
+| 5 | index | |
+| 6 | publish | |
+| 7 | check | never: the check failed |
+| 8 | upstream | yes: an upstream outage |
+| 9 | conflict, for example with `owfeed.lock` | after `owfeed lock --update` and a read of the diff |
 
 ### Pages deploy settings that break the live site
 
@@ -198,7 +255,8 @@ The publish job is a separate job with the key. Common causes:
 - **`actions/deploy-pages` needs `actions: read`.** A `permissions:` block that names other scopes
   silently withholds it.
 - **`owfeed verify` reports OWF514** when the live site has lost `.nojekyll`. Outside the deploy is
-  the only place that answer exists.
+  the only place that answer exists. owfeed's fix: set `include-hidden-files: true` on
+  `actions/upload-pages-artifact`. The pinned `feed.yml` sets it.
 
 ---
 
@@ -228,15 +286,18 @@ owfeed smoke                  # installs the built feed on a real OpenWrt image
 1. Check the owfeed release is published. If you push `setup@vX.Y.Z` while that release is still
    building, every job fails with *"does not verify as built by owfeed/owfeed's release workflow"*.
    That reads like an attack and is a race.
-2. Move the pin. It is one line in each workflow: `uses: .../feed.yml@v0.5.8` in `pr.yml` and
-   `publish.yml`, `uses: owfeed/owfeed/setup@v0.5.8` in `intake.yml`. Do not add
+2. Move the pin. It is one line in each workflow: `uses: owfeed/owfeed/.github/workflows/feed.yml@v0.5.8`
+   in `pr.yml` and `publish.yml`, `uses: owfeed/owfeed/setup@v0.5.8` in `intake.yml`. Do not add
    `owfeed-version:` back: that workflow installs the owfeed release it is tagged with.
-3. Check every line moved. Use the grep rather than counting from memory. It also prints
-   comments that name a version; leave those.
+3. Check every line moved. Use the grep rather than counting from memory. It matches any major
+   version, so it works for v1.x too. It also prints comments that name a version; leave those.
 
    ```sh
-   grep -rn 'v0\.' .github/workflows
+   grep -rnE '@v[0-9]+\.' .github/workflows
    ```
+
+   If the build then fails on `owfeed.lock`, run `owfeed lock --update`, read the diff and commit it
+   in the same pull request.
 
 4. Open a pull request, like anything else.
 
@@ -288,7 +349,12 @@ remove it and install a new one by hand. No path reaches a router that is offlin
 
 ### Rotating a key
 
-owfeed does not yet have a command for this; the steps are in its design document. In short:
+owfeed has no rotation command yet: see Limits in
+[owfeed's README](https://github.com/owfeed/owfeed/blob/main/README.md#limits). Since owfeed v0.4.0,
+`signing.also-sign` signs the index with a second key, and `signing.keyring-package` carries the new
+public key to routers. This feed's `owfeed.yml` sets neither. The measured sequence is in
+[apk-behaviour.md](https://github.com/owfeed/owfeed/blob/main/docs/apk-behaviour.md#a-keyring-package-cannot-start-a-rotation-on-its-own).
+In short:
 
 1. Generate a new key.
 2. Publish both public keys for an overlap window.

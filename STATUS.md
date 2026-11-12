@@ -1,12 +1,13 @@
 # What is built in this feed, and what is not
 
-*This file says how much of this feed's side exists, as of 2026-09-06. It is for anyone deciding
+*This file says how much of this feed's side exists, as of 2026-11-12. It is for anyone deciding
 what the feed can be relied on for today. [ECOSYSTEM.md](https://github.com/owfeed/owfeed/blob/main/docs/ECOSYSTEM.md)
 in owfeed says where the boundaries between owlab, owfeed and this feed run and why.*
 
 - The feed is served from `https://repo.owfeed.org` since 2026-07-29. Routers on the old URL get a 404.
 - Updates go from an upstream release to `repo.owfeed.org` with nobody in the loop.
-- The intake funnel is built. No third party has used it yet.
+- The intake funnel is built. No third party has used it yet: the one third-party package so far
+  came as a pull request.
 - Not built: a bot pull request that merges itself, a consumer job on top of the check, and
   CODEOWNERS as a mechanism.
 - One known contradiction: one key covers four upstream repositories.
@@ -34,8 +35,10 @@ describes, a claim that stops being true is a line in the pull request that made
 
 - **New URL:** `https://repo.owfeed.org`.
 - **Old URL:** `https://vizzletf.github.io/owfeed-packages`.
-- Routers subscribed to the old URL carry it in `/etc/apk/repositories.d/`. It is listed in
-  `/etc/sysupgrade.conf`, so it survives a firmware upgrade.
+- Routers subscribed to the old URL carry it in `/etc/apk/repositories.d/`. The install snippet they
+  ran listed it in `/etc/sysupgrade.conf`, so it survives a firmware upgrade.
+- From owfeed v0.3.1, released after the move, the subscribe script writes
+  `/lib/upgrade/keep.d/owfeed-packages` instead, as [README.md](README.md) shows.
 - GitHub does not redirect Pages across owners. Those routers get a 404 from `apk update` and stop
   receiving updates. Nothing can be done for them from here.
 - The domain is owned by this project. This is the last time the URL has to move.
@@ -55,14 +58,14 @@ matters cannot be reached at all.
 
 | What | Evidence |
 |---|---|
-| Feed updates reaching a router | Upstream released 0.14.10 → the update bot opened #51 with the pins recomputed → a maintainer approved the held check and merged it → `Publish` → the served 25.12 index carries `0.14.10-r1`, read from a router. That was the path before #61. The row "An update landing and publishing with nobody in the loop" is the same journey without a person |
+| Feed updates reaching a router | Upstream released 0.14.10 → the update bot opened [#51](https://github.com/owfeed/owfeed-packages/pull/51) with the pins recomputed → a maintainer approved the held check and merged it → `Publish` → the served 25.12 index carries `0.14.10-r1`, read from a router. That was the path before [#61](https://github.com/owfeed/owfeed-packages/pull/61). The row "An update landing and publishing with nobody in the loop" is the same journey without a person |
 | Publishing through owfeed's reusable workflow | `publish.yml` calls `feed.yml@v0.5.8` with `secrets: inherit`. A probe (at v0.5.0) measured that a called job's `environment: feed` resolves against this repository, and the signing secrets reached it at their real length |
 | An author signature inside every package | `signing.author-keys: ./keys` in `owfeed.yml`, one EC public half pinned per package. An unsigned package is dropped from the index (OWF407), and `tools/check-tree.sh` then fails the publish. A green publish is the evidence |
 | Automatic-update tier rules | Six scenarios exercised in a real git repository: manifest/minor merges, major bump holds, `binaries` holds, no `SIG_KEY` holds, a diff touching `SIG_KEY_ID` holds, the daily ceiling holds |
 | Verify before read | `tools/fetch.sh` checks the signature before parsing, and cross-checks `repo` and `tag` inside the manifest. The signature says *who*, never *what about* |
 | Ingest without a key | The build job runs contributed fetch scripts and never sees the signing key. The key appears only after the bytes are already in an artifact |
-| An update landing and publishing with nobody in the loop | `luci-app-footstrap-files 0.1.3`, `luci-theme-footstrap 0.14.11` and `luci-app-gitbackup 0.1.1` each went from an upstream release to `repo.owfeed.org` with no human action: branch pushed, `Check` dispatched, `tools/land-updates.sh` fast-forwarded `main`, `Publish` dispatched |
-| The feed on its own domain | `owfeed verify` passes six checks against `https://repo.owfeed.org`, and luci-theme-footstrap installs the published theme by name from it on a real router |
+| An update landing and publishing with nobody in the loop | `luci-app-footstrap-files 0.1.3`, `luci-theme-footstrap 0.14.11` and `luci-app-gitbackup 0.1.1` each went from an upstream release to `repo.owfeed.org` with no human action: branch pushed, `Check` dispatched, `tools/land-updates.sh` fast-forwarded `main`, `Publish` dispatched. Since then the same path landed `luci-app-footstrap-files 0.1.4` and `luci-theme-footstrap` 0.14.12 to 0.14.20, the last on 2026-11-02, each as an `owfeed-bot` commit on `main` with no pull request. The bot has opened no pull request since [#60](https://github.com/owfeed/owfeed-packages/pull/60) |
+| The feed on its own domain | `owfeed verify` passed 17 checks against `https://repo.owfeed.org` on 2026-11-12. luci-theme-footstrap installed the published theme by name from it on a real router, as recorded on 2026-09-06 |
 
 ## Built but not yet exercised in anger
 
@@ -70,7 +73,10 @@ matters cannot be reached at all.
 `.github/workflows/intake.yml`.
 
 - It answers correctly when run by hand against a real release.
-- No third party has used it. The first genuine request is still the first genuine test.
+- No third party has used it: the repository has no `package-request` issue. The first genuine
+  request is still the first genuine test.
+- The one third-party package so far, `luci-app-podkop-bot`, arrived as a pull request,
+  [#66](https://github.com/owfeed/owfeed-packages/pull/66).
 
 ## Not built, and why
 
@@ -106,7 +112,7 @@ The hold reached this organisation between 2026-08-30 20:43Z and 2026-09-01 10:0
 on `attempts/1` of the runs on the `update/*` branches either side of it.
 
 It is not this repository's `fork-pr-contributor-approval` policy. That policy was relaxed to
-`first_time_contributors_new_to_github` at repository and organisation level at once. The bot's #60
+`first_time_contributors_new_to_github` at repository and organisation level at once. The bot's [#60](https://github.com/owfeed/owfeed-packages/pull/60)
 still came back `attempt 1 = action_required` (run 33966648498). Both policies were put back.
 
 GitHub names one fix: "use a GitHub
@@ -161,6 +167,8 @@ for one key per repository.
   repository to another, so the shared key is tolerable.
 - Separate keys would buy blast radius, not correctness.
 - The doctrine says so out loud rather than being quietly contradicted by the table beneath it.
+- [CONTRIBUTING.md](CONTRIBUTING.md#sign-every-package-with-your-own-key) asks authors for one key
+  per repository too.
 
 ## Where to look
 
