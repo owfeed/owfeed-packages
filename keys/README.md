@@ -1,27 +1,65 @@
 # Pinned upstream keys
 
-The public keys of the people whose packages this feed carries. Two kinds, doing two different
-jobs, and both are pinned here for the same reason.
+This directory holds the public keys of the people whose packages this feed carries.
 
-**`*.pub` — usign.** Verifies the detached signature beside a release, before this feed reads or
-unpacks anything. It answers *did the author publish these bytes*, at ingest time, and then it is
-done: the signature it checks never leaves this repository.
+- Two kinds of key, for two jobs: `*.pub` (usign) and `*.pem` (EC prime256v1).
+- Both are pinned in this repository for the same reason: whoever replaces an artifact could also replace a key fetched beside it.
+- Adding or changing a key is the one diff in this repository that deserves a second look.
 
-**`*.pem` — EC prime256v1.** The key an author signs the package itself with. That signature is
-inside the `.apk` and travels all the way to the router, so it can be checked by anyone, at any
-time, against a copy of the key obtained from somewhere that is not this feed. It is the only
-claim about a package that survives the feed — this feed signs the index, and an index proves only
-that this feed published a file.
+## What do you want to do?
 
-Pinned rather than fetched: whoever can replace an artifact can replace the signature beside it and
-the key it names. A key is only a check once it comes from somewhere the attacker does not control,
-and here that is this repository's history.
+| I want to… | Go to |
+|---|---|
+| know what each kind of key does | [Two kinds of key](#two-kinds-of-key) |
+| find the key for a package | [usign keys](#usign-release-signatures-checked-at-ingest), [EC keys](#ec-package-signatures-checked-on-the-router-by-anyone-who-wants-to) |
+| add or change a key | [Adding or changing a key](#adding-or-changing-a-key) |
+| know how the tools read this directory | [How the tools use these keys](#how-the-tools-use-these-keys) |
 
-Adding or changing a key is the one diff in this repository that deserves a second look. Verify the
-key out of band — against the author's repository, a fingerprint they published elsewhere, anything
-that is not the release you are about to trust it for.
+## Two kinds of key
 
-### usign — release signatures, checked at ingest
+| | `*.pub`, usign | `*.pem`, EC prime256v1 |
+|---|---|---|
+| verifies | the detached signature beside a release | the author's signature on the package itself |
+| checked | at ingest, before this feed reads or unpacks anything | on the router, by anyone, at any time |
+| signature travels | never leaves this repository | inside the `.apk`, all the way to the router |
+
+- The usign check answers *did the author publish these bytes*, at ingest time, and then it is done.
+- The EC signature can be checked against a copy of the key obtained from somewhere other than this
+  feed. It is the only claim about a package that survives the feed. This feed signs the index, and
+  an index proves only that this feed published a file.
+
+<details>
+<summary>Why the keys are pinned here and not fetched</summary>
+
+Whoever can replace an artifact can replace the signature beside it and the key it names. A key is
+a check only once it comes from somewhere the attacker does not control. Here that place is this
+repository's history.
+
+</details>
+
+## Adding or changing a key
+
+Verify the key out of band before you add it.
+
+- Check it against the author's repository, a fingerprint they published elsewhere, anything that is
+  not the release you are about to trust it for.
+- Adding or changing a key is the diff `.github/CODEOWNERS` names.
+- A key arrives in a pull request a person opened. Nothing pushes those.
+
+<details>
+<summary>Why the automation cannot reach this directory</summary>
+
+- The update job writes one file, `packages/<name>/upstream.sh`. It refuses even that when the diff
+  moves anything but the version and its checksums.
+- `tools/land-updates.sh` pushes an update onto `main`. It refuses any branch whose diff names another
+  path.
+- No branch rule enforces the code-owner review. That needs a reviewer who is not the author. With a
+  single maintainer it would block every key addition permanently. Turn it on when there is a second
+  maintainer.
+
+</details>
+
+## usign: release signatures, checked at ingest
 
 | key | id | covers |
 |---|---|---|
@@ -29,9 +67,23 @@ that is not the release you are about to trust it for.
 | `podkop-updater.pub` | `37ddece4c0eef357` | `podkop-updater` |
 | `luci-app-podkop-bot.pub` | `d6971b8a1b9a8ba4` | `luci-app-podkop-bot` |
 
-### EC — package signatures, checked on the router by anyone who wants to
+This feed wants a key per upstream repository. A key per person does not meet that, and this table does not meet that
+yet: `vizzletf-release.pub` covers four repositories, because one release pipeline signs them all.
 
-One per repository, which is what the note below asks for and what these meet.
+<details>
+<summary>Why one key per repository, and why the shared key is tolerable</summary>
+
+- A signature says who wrote something and never what it is about. So with one key across several
+  repositories, a manifest lifted from one of them verifies perfectly as another.
+- `owfeed` checks the `repo` line in the manifest as well, and that closes the hole on its own. So
+  the shared key is tolerable, and splitting it is not urgent.
+- Separate keys would limit the blast radius: a compromise of one would reach nothing else.
+
+</details>
+
+## EC: package signatures, checked on the router by anyone who wants to
+
+One key per repository, which is what the note above asks for and what these meet.
 
 | key | identity | covers |
 |---|---|---|
@@ -42,26 +94,9 @@ One per repository, which is what the note below asks for and what these meet.
 | `podkop-updater.pub.pem` | `2e6784ccfa5af1f908b5904d26067249` | `podkop-updater` |
 | `luci-app-podkop-bot.pub.pem` | `d4627673734fe2b54f54770c2c1d3c6c` | `luci-app-podkop-bot` |
 
-`signing.author-keys` in `owfeed.yml` points at this directory, and `owfeed doctor` fails any
-package that carries no signature by one of these. Only files ending in `.pem` are read for that; the usign
-keys sit alongside and are used by `tools/fetch.sh`.
+## How the tools use these keys
 
-A key per upstream repository rather than one per person is what this feed wants, and the table
-above does not yet meet it: `vizzletf-release.pub` covers four repositories, because one release
-pipeline signs them all.
-
-The reason to want it: a signature says who wrote something and never what it is about, so one key
-across several repositories is how a manifest lifted from one of them verifies perfectly as
-another. `owfeed` checks the `repo` line in the manifest as well, and that closes the hole on its
-own — which is why the shared key is tolerable rather than urgent. What separate keys would add is
-blast radius: a compromise of one would reach nothing else.
-
-Adding or changing a key is the diff `.github/CODEOWNERS` names. The automation cannot reach it:
-the update job writes one file — `packages/<name>/upstream.sh` — and refuses even that when the diff
-moves anything but the version and its checksums, and `tools/land-updates.sh`, which is what pushes
-an update onto `main`, refuses any branch whose diff names another path. A key arrives in a pull
-request a person opened, and nothing pushes those.
-
-The code-owner review is not enforced by a branch rule. That needs a reviewer who is not the
-author, and with a single maintainer it would block every key addition permanently rather than
-gate it. Turn it on when there is a second maintainer.
+- `signing.author-keys` in `owfeed.yml` points at this directory.
+- `owfeed doctor` fails any package that carries no signature by one of these. It reads only files
+  ending in `.pem` for that.
+- The usign keys sit alongside. `tools/fetch.sh` uses them.
